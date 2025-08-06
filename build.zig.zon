@@ -1,0 +1,16 @@
+.{
+    .name = .Lowpower_Project_TMDS_reimpl,
+    .version = "0.0.1",
+    .fingerprint = 0xae6402010b1119dc, // Changing this has security and trust implications.
+    .minimum_zig_version = "0.15.0-dev.1393+493265486",
+    .dependencies = .{
+        .zzplot = .{ .path = "./third-party/zzplot" },
+        .nanovg = .{ .path = "./third-party/nanovg-zig" },
+    },
+
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "src",
+    },
+}

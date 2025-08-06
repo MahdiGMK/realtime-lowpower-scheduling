@@ -1,0 +1,6 @@
+[submodule "third-party/zzplot"]
+	path = third-party/zzplot
+	url = git@github.com:MahdiGMK/zzplot.git
+[submodule "third-party/nanovg-zig"]
+	path = third-party/nanovg-zig
+	url = git@github.com:MahdiGMK/nanovg-zig.git

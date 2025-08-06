@@ -1,0 +1,7 @@
+zig-out/
+zig-cache/
+*.core
+.jetzig
+.zig-cache/
+log/
+*.tmp
