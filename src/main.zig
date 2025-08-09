@@ -141,9 +141,15 @@ fn coolingTemp(p: Processor, temp_ini: f32, duration: f32) f32 { // OK
     return heatingTemp(p, temp_ambiant, temp_ini, duration);
 }
 
-fn numberOfCollingIntervals(t: Task, p: Processor, temp_est: f32) usize {
-    return @intFromFloat(@ceil((t.per_proc[p.pid].wcet - maximumDurationOfContExecution(t, p, temp_est)) /
-        maximumDurationOfContExecution(t, p, p.temp_cutoff)));
+fn numberOfCoollingIntervals(t: Task, p: Processor, temp_est: f32) usize {
+    const wcet = t.per_proc[p.pid].wcet;
+    const first_cycle = maximumDurationOfContExecution(t, p, temp_est);
+    if (first_cycle >= wcet) return 0;
+
+    const after_first = wcet - first_cycle;
+    const run_cycle_dur = maximumDurationOfContExecution(t, p, p.temp_cutoff);
+    const res = after_first / run_cycle_dur;
+    return @intFromFloat(@floor(res) + 1);
 }
 
 fn maxTempAllowedContExec(t: Task, p: Processor, rem_exec_time: f32) f32 {
@@ -383,10 +389,10 @@ const testing = struct {
         var cooling_cnt: [sample_count]f32 = undefined;
         var tt: f32 = temp_from;
         for (&temp_ini, &cooling_cnt) |*temp, *dur| {
-            defer tt += (temp_to - temp_from) / sample_count;
+            defer tt += (temp_to - temp_from) / @as(comptime_float, sample_count);
 
             temp.* = tt;
-            dur.* = @floatFromInt(numberOfCollingIntervals(t, p, tt));
+            dur.* = @floatFromInt(numberOfCoollingIntervals(t, p, tt));
         }
         try plotting.simple(
             &.{&temp_ini},
