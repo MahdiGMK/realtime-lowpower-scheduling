@@ -303,9 +303,9 @@ pub fn main() !void {
 const testing = struct {
     const testing_task = Task{
         .per_proc = .{
-            .{ .wcet = 1, .steady_state_temp = 90 }, // p0
-            .{ .wcet = 2, .steady_state_temp = 80 }, // p1
-            .{ .wcet = 4, .steady_state_temp = 50 }, // p2
+            .{ .wcet = 1000 / 2, .steady_state_temp = 90 }, // p0
+            .{ .wcet = 1000 / 2, .steady_state_temp = 80 }, // p1
+            .{ .wcet = 3000 / 2, .steady_state_temp = 50 }, // p2
         },
     };
     const testing_platform = Platform{ .processors = .{
@@ -380,26 +380,32 @@ const testing = struct {
     }
     test "numberOfCollingIntervals" {
         const t = testing_task;
-        const p = testing_platform.processors[0];
 
         const sample_count = 100;
         const temp_from = 0.0;
         const temp_to = 100.0;
         var temp_ini: [sample_count]f32 = undefined;
-        var cooling_cnt: [sample_count]f32 = undefined;
+        var cooling_cnt: [Platform.NPROC][sample_count]f32 = undefined;
         var tt: f32 = temp_from;
-        for (&temp_ini, &cooling_cnt) |*temp, *dur| {
-            defer tt += (temp_to - temp_from) / @as(comptime_float, sample_count);
-
+        for (&temp_ini) |*temp| {
             temp.* = tt;
-            dur.* = @floatFromInt(numberOfCoollingIntervals(t, p, tt));
+            tt += (temp_to - temp_from) / @as(comptime_float, sample_count);
+        }
+        for (testing_platform.processors, &cooling_cnt) |p, *p_cnt| {
+            for (temp_ini, p_cnt) |temp, *cnt| {
+                cnt.* = @floatFromInt(numberOfCoollingIntervals(t, p, temp));
+            }
         }
         try plotting.simple(
-            &.{&temp_ini},
-            &.{&cooling_cnt},
-            &.{plotting.Aes{ .line_width = 3 }},
+            &.{ &temp_ini, &temp_ini, &temp_ini },
+            &.{ &cooling_cnt[0], &cooling_cnt[1], &cooling_cnt[2] },
+            &.{
+                plotting.Aes{ .line_width = 3, .line_col = plotting.Color.red },
+                plotting.Aes{ .line_width = 3, .line_col = plotting.Color.green },
+                plotting.Aes{ .line_width = 3, .line_col = plotting.Color.blue },
+            },
             .{ temp_from - 5, temp_to + 5 },
-            .{ -1, 10 },
+            .{ -1, 5 },
         );
     }
 };
