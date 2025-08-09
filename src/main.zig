@@ -120,11 +120,12 @@ fn effectiveStartTime(n: *TaskDAG.Node, p: Processor) f32 {
 }
 fn maximumDurationOfContExecution(t: Task, p: Processor, temp_ini: f32) f32 {
     const temp_steady = t.per_proc[p.pid].steady_state_temp;
-    if (temp_steady < temp_ini) {
+    if (temp_ini > p.temp_limit) return 0;
+    if (temp_steady < p.temp_limit) {
         return std.math.inf(f32);
     }
     const res: f32 = -1.0 / p.thermB() * @log((p.temp_limit - temp_steady) / (temp_ini - temp_steady));
-    std.debug.print("{} {} {} {} => {}\n", .{ p.thermB(), p.temp_limit, temp_steady, temp_ini, res });
+    // std.debug.print("{} {} {} {} => {}\n", .{ p.thermB(), p.temp_limit, temp_steady, temp_ini, res });
     return res;
 }
 
@@ -141,8 +142,8 @@ fn coolingTemp(p: Processor, temp_ini: f32, duration: f32) f32 { // OK
 }
 
 fn numberOfCollingIntervals(t: Task, p: Processor, temp_est: f32) usize {
-    return (t.per_proc[p.pid].wcet - maximumDurationOfContExecution(t, p, temp_est)) /
-        maximumDurationOfContExecution(t, p, p.temp_cutoff);
+    return @intFromFloat(@ceil((t.per_proc[p.pid].wcet - maximumDurationOfContExecution(t, p, temp_est)) /
+        maximumDurationOfContExecution(t, p, p.temp_cutoff)));
 }
 
 fn maxTempAllowedContExec(t: Task, p: Processor, rem_exec_time: f32) f32 {
@@ -342,30 +343,59 @@ const testing = struct {
         );
     }
     test "maximumDurationOfContExecution" { //OK
-        const p = testing_platform.processors[0];
         const t = testing_task;
 
         const sample_count = 100;
-        const temp_from = 0;
-        const temp_to = 100;
+        const temp_from = 0.0;
+        const temp_to = 100.0;
         var temp_ini: [sample_count]f32 = undefined;
-        var exec_dur: [sample_count]f32 = undefined;
+        var exec_dur: [Platform.NPROC][sample_count]f32 = undefined;
         var tt: f32 = temp_from;
-        for (&temp_ini, &exec_dur) |*temp, *dur| {
+        for (&temp_ini) |*temp| {
+            temp.* = tt;
+            tt += (temp_to - temp_from) / @as(comptime_float, sample_count);
+        }
+        for (testing_platform.processors, &exec_dur) |p, *p_dur| {
+            for (temp_ini, p_dur) |temp, *dur| {
+                dur.* = maximumDurationOfContExecution(t, p, temp);
+            }
+        }
+        try plotting.simple(
+            &.{ &temp_ini, &temp_ini, &temp_ini },
+            &.{ &exec_dur[0], &exec_dur[1], &exec_dur[2] },
+            &.{
+                plotting.Aes{ .line_width = 3, .line_col = plotting.Color.red },
+                plotting.Aes{ .line_width = 3, .line_col = plotting.Color.green },
+                plotting.Aes{ .line_width = 3, .line_col = plotting.Color.blue },
+            },
+            .{ temp_from - 5, temp_to + 5 },
+            .{ -10, 1000 },
+        );
+    }
+    test "numberOfCollingIntervals" {
+        const t = testing_task;
+        const p = testing_platform.processors[0];
+
+        const sample_count = 100;
+        const temp_from = 0.0;
+        const temp_to = 100.0;
+        var temp_ini: [sample_count]f32 = undefined;
+        var cooling_cnt: [sample_count]f32 = undefined;
+        var tt: f32 = temp_from;
+        for (&temp_ini, &cooling_cnt) |*temp, *dur| {
             defer tt += (temp_to - temp_from) / sample_count;
 
             temp.* = tt;
-            dur.* = maximumDurationOfContExecution(t, p, tt);
+            dur.* = @floatFromInt(numberOfCollingIntervals(t, p, tt));
         }
         try plotting.simple(
             &.{&temp_ini},
-            &.{&exec_dur},
-            &.{.{}},
+            &.{&cooling_cnt},
+            &.{plotting.Aes{ .line_width = 3 }},
             .{ temp_from - 5, temp_to + 5 },
-            .{ 0, 1000 },
+            .{ -1, 10 },
         );
     }
-    // test ""
 };
 
 test {
