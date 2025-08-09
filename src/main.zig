@@ -1,4 +1,6 @@
 const std = @import("std");
+const plotting = @import("plotting.zig");
+
 const global = struct {
     var gpa = std.heap.DebugAllocator(.{}).init;
     const alloc = gpa.allocator();
@@ -126,45 +128,16 @@ fn maximumDurationOfContExecution(t: Task, p: Processor, temp_ini: f32) f32 {
     return res;
 }
 
-fn coolingTime(p: Processor, temp_fin: f32, temp_ini: f32) f32 {
+fn coolingTime(p: Processor, temp_fin: f32, temp_ini: f32) f32 { // OK
     return -1.0 / p.thermB() * @log((temp_fin - temp_ambiant) / (temp_ini - temp_ambiant));
 }
 
-fn heatingTemp(p: Processor, temp_fin: f32, temp_ini: f32, duration: f32) f32 {
+fn heatingTemp(p: Processor, temp_fin: f32, temp_ini: f32, duration: f32) f32 { // OK
     return temp_fin + (temp_ini - temp_fin) * @exp(-p.thermB() * duration);
 }
-fn coolingTemp(p: Processor, temp_ini: f32, duration: f32) f32 {
+
+fn coolingTemp(p: Processor, temp_ini: f32, duration: f32) f32 { // OK
     return heatingTemp(p, temp_ambiant, temp_ini, duration);
-}
-
-test "cooling/heating temp/time" {
-    const p = Processor{
-        .pid = 0,
-        .temp_cutoff = 80,
-        .temp_limit = 100,
-        .thermo = .init(2.332, 13.1568, 0.1754, 0.68, 380, 2.6),
-    };
-    var t: f32 = 0;
-    const count = 100;
-    var xx: [count]f32 = undefined;
-    var cooling: [count]f32 = undefined;
-    var heating: [count]f32 = undefined;
-    const temp_ini = 50;
-    const temp_fin = 100;
-    for (&xx, &cooling, &heating) |*x, *y, *z| {
-        defer t += 50;
-
-        x.* = t;
-        y.* = coolingTemp(p, temp_ini, t);
-        z.* = heatingTemp(p, temp_fin, temp_ini, t);
-    }
-    try @import("plotting.zig").simple(
-        &.{ &xx, &xx },
-        &.{ &cooling, &heating },
-        .{ -5, t + 5 },
-        .{ -5, 105 },
-    );
-    // try @import("plotting.zig").simple(&xx, &heating, .{ -5, t + 5 }, .{ -5, 105 });
 }
 
 fn numberOfCollingIntervals(t: Task, p: Processor, temp_est: f32) usize {
@@ -264,8 +237,8 @@ fn tmds(graph: *TaskDAG) !void {
         }
     }
 }
+const MAX_BW = 1e6;
 pub fn main() !void {
-    const MAX_BW = 1e6;
     // Platform.NPROC = 3
     platform = .{ .processors = .{
         .{ .pid = 0, .temp_limit = 80, .temp_cutoff = 60, .thermo = .init(2.332, 13.1568, 0.1754, 0.68, 380, 2.6) },
@@ -318,4 +291,59 @@ pub fn main() !void {
             .{ tid, nd.data.actual_start_time.?, nd.data.actual_finish_time.?, nd.data.allocated_pid.? },
         );
     }
+}
+
+const testing = struct {
+    const task = Task{
+        .per_proc = .{
+            .{ .wcet = 1, .steady_state_temp = 90 }, // p0
+            .{ .wcet = 2, .steady_state_temp = 80 }, // p1
+            .{ .wcet = 4, .steady_state_temp = 50 }, // p2
+        },
+    };
+    const testing_platform = Platform{ .processors = .{
+        .{ .pid = 0, .temp_limit = 80, .temp_cutoff = 60, .thermo = .init(2.332, 13.1568, 0.1754, 0.68, 380, 2.6) },
+        .{ .pid = 1, .temp_limit = 70, .temp_cutoff = 50, .thermo = .init(2.138, 5.0187, 0.1942, 0.487, 295, 3.4) },
+        .{ .pid = 2, .temp_limit = 60, .temp_cutoff = 40, .thermo = .init(4.556, 15.6262, 0.1942, 0.238, 320, 3.0) },
+    }, .communication_bw = .{
+        .{ MAX_BW, 2, 2 },
+        .{ 2, MAX_BW, 2 },
+        .{ 2, 2, MAX_BW },
+    } };
+
+    test "cooling/heating temp/time" { // OK
+        const p = testing_platform.processors[0];
+        var t: f32 = 0;
+        const sample_count = 100;
+        var xx: [sample_count]f32 = undefined;
+        var cooling: [sample_count]f32 = undefined;
+        var heating: [sample_count]f32 = undefined;
+        var ttcool: [sample_count]f32 = undefined;
+        const temp_ini = 50;
+        const temp_fin = 100;
+        for (&xx, &cooling, &heating, &ttcool) |*time0, *ctemp, *htemp, *tcool| {
+            defer t += 50;
+
+            time0.* = t;
+            ctemp.* = coolingTemp(p, temp_ini, t);
+            htemp.* = heatingTemp(p, temp_fin, temp_ini, t);
+            tcool.* = coolingTime(p, ctemp.*, temp_ini);
+        }
+        try plotting.simple(
+            &.{ &xx, &xx, &ttcool },
+            &.{ &cooling, &heating, &cooling },
+            &.{
+                plotting.Aes{ .line_col = plotting.Color.cyan, .line_width = 3 },
+                plotting.Aes{ .line_col = plotting.Color.red, .line_width = 3 },
+                plotting.Aes{ .line_col = plotting.Color.olive, .line_width = 3 },
+            },
+            .{ -5, t + 5 },
+            .{ -5, 105 },
+        );
+    }
+    test "maximumDurationOfContExecution" {}
+};
+
+test {
+    _ = testing;
 }

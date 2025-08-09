@@ -12,7 +12,10 @@ pub const c = @cImport({
     @cInclude("GLFW/glfw3.h");
 });
 
-pub fn simple(x: []const []f32, y: []const []f32, x_lim: [2]f32, y_lim: [2]f32) !void {
+pub const Aes = zzplot.PlotAes;
+pub const Color = zzplot.Color;
+
+pub fn simple(x: []const []f32, y: []const []f32, aes: []const Aes, x_lim: [2]f32, y_lim: [2]f32) !void {
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     defer arena.deinit();
     const allocator = arena.allocator();
@@ -36,7 +39,9 @@ pub fn simple(x: []const []f32, y: []const []f32, x_lim: [2]f32, y_lim: [2]f32) 
         fig.begin();
 
         ax.draw();
-        for (x, y) |xx, yy| {
+        ax.drawGrid();
+        for (x, y, aes) |xx, yy, aaes| {
+            plt.aes = aaes;
             plt.plot(xx, yy);
         }
 
