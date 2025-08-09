@@ -294,7 +294,7 @@ pub fn main() !void {
 }
 
 const testing = struct {
-    const task = Task{
+    const testing_task = Task{
         .per_proc = .{
             .{ .wcet = 1, .steady_state_temp = 90 }, // p0
             .{ .wcet = 2, .steady_state_temp = 80 }, // p1
@@ -341,7 +341,31 @@ const testing = struct {
             .{ -5, 105 },
         );
     }
-    test "maximumDurationOfContExecution" {}
+    test "maximumDurationOfContExecution" { //OK
+        const p = testing_platform.processors[0];
+        const t = testing_task;
+
+        const sample_count = 100;
+        const temp_from = 0;
+        const temp_to = 100;
+        var temp_ini: [sample_count]f32 = undefined;
+        var exec_dur: [sample_count]f32 = undefined;
+        var tt: f32 = temp_from;
+        for (&temp_ini, &exec_dur) |*temp, *dur| {
+            defer tt += (temp_to - temp_from) / sample_count;
+
+            temp.* = tt;
+            dur.* = maximumDurationOfContExecution(t, p, tt);
+        }
+        try plotting.simple(
+            &.{&temp_ini},
+            &.{&exec_dur},
+            &.{.{}},
+            .{ temp_from - 5, temp_to + 5 },
+            .{ 0, 1000 },
+        );
+    }
+    // test ""
 };
 
 test {
