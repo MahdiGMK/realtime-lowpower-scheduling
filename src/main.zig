@@ -11,7 +11,7 @@ const Processor = struct {
     temp_cutoff: f32,
     power_mode_switching_time: f32 = 0.000_001 * 80, // 80us according to the paper
     avail: f32 = 0,
-    temp_cur: f32 = temp_ambiant,
+    temp_cur: f32 = TEMP_AMBIANT,
     thermo: struct {
         a: f32,
         b: f32,
@@ -27,14 +27,14 @@ const Processor = struct {
         return self.thermo.b - self.thermo.a * self.thermo.c2 * self.thermo.f;
     }
 };
-const temp_ambiant = 25;
+const TEMP_AMBIANT = 25;
 const Platform = struct {
     const NPROC = 3;
     processors: [NPROC]Processor,
     communication_bw: [NPROC][NPROC]f32,
 };
-var platform: Platform = undefined;
 const Task = struct {
+    id: usize,
     per_proc: [Platform.NPROC]struct { wcet: f32, steady_state_temp: f32, optimistic_finish_time: ?f32 = null },
     allocated_pid: ?u8 = null,
     actual_start_time: ?f32 = null,
@@ -43,6 +43,7 @@ const Task = struct {
 const TaskCommunication = struct {
     data_transfer: f32,
 };
+
 fn DAG(comptime NodeData: type, comptime EdgeData: type) type {
     return struct {
         const Graph = @This();
@@ -75,9 +76,10 @@ fn DAG(comptime NodeData: type, comptime EdgeData: type) type {
         }
     };
 }
+
 const TaskDAG = DAG(Task, TaskCommunication);
 
-fn optimisticFinishTime(n: *TaskDAG.Node, p: Processor) f32 {
+fn optimisticFinishTime(n: *TaskDAG.Node, platform: Platform, p: Processor) f32 {
     if (n.data.per_proc[p.pid].optimistic_finish_time) |oft| return oft;
     if (n.dependants.items.len == 0) return n.data.per_proc[p.pid].wcet;
 
@@ -88,7 +90,7 @@ fn optimisticFinishTime(n: *TaskDAG.Node, p: Processor) f32 {
         for (platform.processors) |np| {
             rs = @min(
                 rs,
-                optimisticFinishTime(nn, np) +
+                optimisticFinishTime(nn, platform, np) +
                     e.data_transfer / platform.communication_bw[p.pid][np.pid],
             );
         }
@@ -98,14 +100,16 @@ fn optimisticFinishTime(n: *TaskDAG.Node, p: Processor) f32 {
     n.data.per_proc[p.pid].optimistic_finish_time = res + n.data.per_proc[p.pid].wcet;
     return n.data.per_proc[p.pid].optimistic_finish_time.?;
 }
-fn taskRank(n: *TaskDAG.Node) f32 {
+
+fn taskRank(n: *TaskDAG.Node, platform: Platform) f32 {
     var res: f32 = 0;
     for (platform.processors) |p| {
-        res += optimisticFinishTime(n, p);
+        res += optimisticFinishTime(n, platform, p);
     }
     return res / Platform.NPROC;
 }
-fn effectiveStartTime(n: *TaskDAG.Node, p: Processor) f32 {
+
+fn effectiveStartTime(n: *const TaskDAG.Node, platform: Platform, p: Processor) f32 { // OK
     var dep: f32 = 0;
     for (n.dependencies.items) |it| {
         const pn, const e = it;
@@ -118,7 +122,8 @@ fn effectiveStartTime(n: *TaskDAG.Node, p: Processor) f32 {
     }
     return @max(p.avail, dep);
 }
-fn maximumDurationOfContExecution(t: Task, p: Processor, temp_ini: f32) f32 {
+
+fn maximumDurationOfContExecution(t: Task, p: Processor, temp_ini: f32) f32 { // OK
     const temp_steady = t.per_proc[p.pid].steady_state_temp;
     if (temp_ini > p.temp_limit) return 0;
     if (temp_steady < p.temp_limit) {
@@ -130,7 +135,7 @@ fn maximumDurationOfContExecution(t: Task, p: Processor, temp_ini: f32) f32 {
 }
 
 fn coolingTime(p: Processor, temp_fin: f32, temp_ini: f32) f32 { // OK
-    return -1.0 / p.thermB() * @log((temp_fin - temp_ambiant) / (temp_ini - temp_ambiant));
+    return -1.0 / p.thermB() * @log((temp_fin - TEMP_AMBIANT) / (temp_ini - TEMP_AMBIANT));
 }
 
 fn heatingTemp(p: Processor, temp_fin: f32, temp_ini: f32, duration: f32) f32 { // OK
@@ -138,10 +143,10 @@ fn heatingTemp(p: Processor, temp_fin: f32, temp_ini: f32, duration: f32) f32 { 
 }
 
 fn coolingTemp(p: Processor, temp_ini: f32, duration: f32) f32 { // OK
-    return heatingTemp(p, temp_ambiant, temp_ini, duration);
+    return heatingTemp(p, TEMP_AMBIANT, temp_ini, duration);
 }
 
-fn numberOfCoollingIntervals(t: Task, p: Processor, temp_est: f32) usize {
+fn numberOfCoollingIntervals(t: Task, p: Processor, temp_est: f32) usize { // OK
     const wcet = t.per_proc[p.pid].wcet;
     const first_cycle = maximumDurationOfContExecution(t, p, temp_est);
     if (first_cycle >= wcet) return 0;
@@ -152,7 +157,9 @@ fn numberOfCoollingIntervals(t: Task, p: Processor, temp_est: f32) usize {
     return @intFromFloat(@floor(res) + 1);
 }
 
-fn maxTempAllowedContExec(t: Task, p: Processor, rem_exec_time: f32) f32 {
+fn maxTempAllowedContExec(t: Task, p: Processor, rem_exec_time: f32) f32 { // OK
+    if (t.per_proc[p.pid].steady_state_temp < p.temp_limit)
+        return p.temp_limit;
     return t.per_proc[p.pid].steady_state_temp +
         (p.temp_limit - t.per_proc[p.pid].steady_state_temp) /
             @exp(-p.thermB() * rem_exec_time);
@@ -188,7 +195,7 @@ fn tett(t: Task, p: Processor, cur_time: f32, temp_ini: f32) struct { fin_t: f32
 }
 
 const TMDS_Error = error{NoEntryPoint};
-fn tmds(graph: *TaskDAG) !void {
+fn tmds(graph: *TaskDAG, platform: *Platform) !void {
     const entry = blk: {
         for (graph.nodes.items) |*nd| {
             if (nd.dependencies.items.len == 0) break :blk nd;
@@ -203,7 +210,7 @@ fn tmds(graph: *TaskDAG) !void {
             var idx: usize = undefined;
             var rnk: f32 = 0;
             for (task_list.items, 0..) |t, i| {
-                const r = taskRank(t);
+                const r = taskRank(t, platform.*);
                 if (rnk <= r) {
                     rnk = r;
                     idx = i;
@@ -218,10 +225,10 @@ fn tmds(graph: *TaskDAG) !void {
         var optstrt: f32 = undefined;
         var optcompl = std.math.inf(f32);
         for (platform.processors) |proc| {
-            const sttime = effectiveStartTime(task, proc);
+            const sttime = effectiveStartTime(task, platform.*, proc);
             const temp_estim = coolingTemp(proc, proc.temp_cur, sttime - proc.avail);
             const estim = tett(task.data, proc, sttime, temp_estim);
-            const schedule_compl_time = estim.fin_t + estim.fin_t + optimisticFinishTime(task, proc);
+            const schedule_compl_time = estim.fin_t + estim.fin_t + optimisticFinishTime(task, platform.*, proc);
             if (optcompl > schedule_compl_time) {
                 optcompl = schedule_compl_time;
                 opttemp = estim.temp_fin;
@@ -244,10 +251,167 @@ fn tmds(graph: *TaskDAG) !void {
         }
     }
 }
+const Simulation = struct {
+    const Event = struct {
+        time: f32,
+        task_id: ?usize,
+    };
+
+    event_lists: [Platform.NPROC]std.ArrayList(Event),
+};
+fn simulateSchedule(dag: TaskDAG, platform: Platform) !Simulation {
+    var sim = Simulation{ .event_lists = undefined };
+    for (&sim.event_lists) |*e| {
+        e.* = try .initCapacity(global.alloc, 1);
+        try e.append(.{ .task_id = null, .time = -1 });
+    }
+
+    var proc_tasks = std.ArrayList(Task).init(global.alloc);
+    defer proc_tasks.deinit();
+
+    for (platform.processors) |p| {
+        proc_tasks.clearRetainingCapacity();
+
+        for (dag.nodes.items) |nd| if (nd.data.allocated_pid == p.pid) try proc_tasks.append(nd.data);
+
+        const Static = struct {
+            fn taskLessThan(_: void, a: Task, b: Task) bool {
+                return a.actual_finish_time.? < b.actual_finish_time.?;
+            }
+        };
+        std.mem.sort(Task, proc_tasks.items, void{}, Static.taskLessThan);
+
+        var time: f32 = -1;
+        var temp: f32 = TEMP_AMBIANT;
+        for (proc_tasks.items) |task| {
+            temp = coolingTemp(p, temp, task.actual_start_time.? - time);
+            time = task.actual_start_time.?;
+            var rem_time = task.per_proc[p.pid].wcet;
+            std.debug.print("proc,task -- {}:{}\n", .{ p.pid, task.id });
+            while (rem_time > 0.1) {
+                try sim.event_lists[p.pid].append(.{
+                    .task_id = task.id,
+                    .time = time,
+                });
+
+                std.debug.print("{}:{} , remtime:{}\n", .{ time, temp, rem_time });
+                const dur = @min(maximumDurationOfContExecution(task, p, temp), rem_time);
+                rem_time -= dur;
+                time += dur;
+                temp = heatingTemp(
+                    p,
+                    task.per_proc[p.pid].steady_state_temp,
+                    temp,
+                    dur,
+                );
+                std.debug.print("run for {} => {}:{} , remtime:{}\n", .{ dur, time, temp, rem_time });
+                std.debug.assert(rem_time < 0.1 or @abs(temp - p.temp_limit) < 0.1);
+
+                if (dur >= rem_time - 0.001) break;
+
+                try sim.event_lists[p.pid].append(.{
+                    .task_id = null,
+                    .time = time,
+                });
+
+                const cool_dur = coolingTime(p, p.temp_cutoff, temp);
+                time += cool_dur;
+                temp = coolingTemp(p, temp, cool_dur);
+                std.debug.assert(@abs(temp - p.temp_cutoff) < 0.1);
+            }
+
+            std.debug.print("was supposed to end in {}\n", .{task.actual_finish_time.?});
+            std.debug.assert(@abs(time - task.actual_finish_time.?) < 0.1);
+
+            time = task.actual_finish_time.?;
+            try sim.event_lists[p.pid].append(.{
+                .task_id = null,
+                .time = time,
+            });
+        }
+    }
+
+    return sim;
+}
+fn visualizeSchedule(dag_inp: TaskDAG, platform_inp: Platform) !void {
+    const Ctx = struct { dag: *const TaskDAG, platform: *const Platform, maxt: f32 };
+    const sim = try simulateSchedule(dag_inp, platform_inp);
+    _ = sim; // autofix
+
+    const Static = struct {
+        fn onDraw(ctx: *anyopaque, fig: *plotting.Figure, ax: *plotting.Axes, plt: *plotting.Plot) void {
+            _ = fig; // autofix
+            ax.draw();
+            const typed_ctx: *const Ctx = @ptrCast(@alignCast(ctx));
+            const dag = typed_ctx.dag;
+            const platform = typed_ctx.platform;
+            const maxt = typed_ctx.maxt;
+
+            for (dag.nodes.items) |it| {
+                plotting.rect(
+                    ax,
+                    plt.vg,
+                    it.data.actual_start_time.?,
+                    @as(f32, @floatFromInt(it.data.allocated_pid.?)) + 0.95,
+                    it.data.actual_finish_time.? - it.data.actual_start_time.?,
+                    0.9,
+                    plotting.Color.green,
+                );
+            }
+
+            const time_sample_count = 1000;
+            for (platform.processors) |p| {
+                var time: f32 = 0;
+                var temp: f32 = TEMP_AMBIANT;
+                var xx: [time_sample_count]f32 = undefined;
+                var yy: [time_sample_count]f32 = undefined;
+                xx[0] = time;
+                yy[0] = temp;
+                const delta_time = maxt / time_sample_count;
+                var is_active = true;
+                for (xx[1..], yy[1..], yy[0 .. yy.len - 1]) |*x, *y, py| {
+                    _ = py; // autofix
+                    time += delta_time;
+                    x.* = time;
+                    temp = if (is_active) heatingTemp(
+                        p,
+                        dag.nodes.items[1].data.per_proc[p.pid].steady_state_temp,
+                        temp,
+                        delta_time,
+                    ) else coolingTemp(p, temp, delta_time);
+                    if (temp > p.temp_limit) is_active = false;
+                    if (temp < p.temp_cutoff) is_active = true;
+                    y.* = (temp - TEMP_AMBIANT) / (p.temp_limit - TEMP_AMBIANT) + @as(f32, @floatFromInt(p.pid));
+                }
+                plt.aes.line_width = 5;
+                plt.plot(&xx, &yy);
+            }
+
+            ax.drawGrid();
+        }
+    };
+    var maxt: f32 = 0;
+    for (dag_inp.nodes.items) |it| {
+        if (it.data.actual_finish_time) |t|
+            maxt = @max(maxt, t);
+    }
+
+    const ctx = Ctx{
+        .dag = &dag_inp,
+        .platform = &platform_inp,
+        .maxt = maxt,
+    };
+    try plotting.complexSingle(
+        @constCast(&ctx),
+        Static.onDraw,
+        .{ -5, maxt + 5 },
+        .{ -1, Platform.NPROC + 1 },
+    );
+}
 const MAX_BW = 1e6;
 pub fn main() !void {
     // Platform.NPROC = 3
-    platform = .{ .processors = .{
+    var platform = Platform{ .processors = .{
         .{ .pid = 0, .temp_limit = 80, .temp_cutoff = 60, .thermo = .init(2.332, 13.1568, 0.1754, 0.68, 380, 2.6) },
         .{ .pid = 1, .temp_limit = 70, .temp_cutoff = 50, .thermo = .init(2.138, 5.0187, 0.1942, 0.487, 295, 3.4) },
         .{ .pid = 2, .temp_limit = 60, .temp_cutoff = 40, .thermo = .init(4.556, 15.6262, 0.1942, 0.238, 320, 3.0) },
@@ -262,6 +426,7 @@ pub fn main() !void {
 
     // append task nodes :
     try task_dag.appendNode(Task{ // t0
+        .id = 0,
         .per_proc = .{
             .{ .wcet = 1, .steady_state_temp = 90 }, // p0
             .{ .wcet = 2, .steady_state_temp = 80 }, // p1
@@ -269,6 +434,7 @@ pub fn main() !void {
         },
     });
     try task_dag.appendNode(Task{ // t1
+        .id = 1,
         .per_proc = .{
             .{ .wcet = 1, .steady_state_temp = 90 }, // p0
             .{ .wcet = 2, .steady_state_temp = 80 }, // p1
@@ -276,6 +442,7 @@ pub fn main() !void {
         },
     });
     try task_dag.appendNode(Task{ // t2
+        .id = 2,
         .per_proc = .{
             .{ .wcet = 1, .steady_state_temp = 90 }, // p0
             .{ .wcet = 2, .steady_state_temp = 80 }, // p1
@@ -289,7 +456,7 @@ pub fn main() !void {
     try task_dag.connectNodes(1, 2, .{ .data_transfer = 0.001 });
 
     // solve scheduling :
-    try tmds(&task_dag);
+    try tmds(&task_dag, &platform);
 
     // results :
     for (task_dag.nodes.items, 0..) |nd, tid| {
@@ -302,6 +469,7 @@ pub fn main() !void {
 
 const testing = struct {
     const testing_task = Task{
+        .id = 0,
         .per_proc = .{
             .{ .wcet = 1000 / 2, .steady_state_temp = 90 }, // p0
             .{ .wcet = 1000 / 2, .steady_state_temp = 80 }, // p1
@@ -378,7 +546,7 @@ const testing = struct {
             .{ -10, 1000 },
         );
     }
-    test "numberOfCollingIntervals" {
+    test "numberOfCoollingIntervals" { // OK
         const t = testing_task;
 
         const sample_count = 100;
@@ -407,6 +575,59 @@ const testing = struct {
             .{ temp_from - 5, temp_to + 5 },
             .{ -1, 5 },
         );
+    }
+    test "maxTempAllowedContExec" { // OK
+        const t = testing_task;
+
+        const sample_count = 100;
+        const time_from = 0.0;
+        const time_to = 1000.0;
+        var rem_time: [sample_count]f32 = undefined;
+        var max_temp: [Platform.NPROC][sample_count]f32 = undefined;
+        var tt: f32 = time_from;
+        for (&rem_time) |*temp| {
+            temp.* = tt;
+            tt += (time_to - time_from) / @as(comptime_float, sample_count);
+        }
+        for (testing_platform.processors, &max_temp) |p, *p_tmp| {
+            for (rem_time, p_tmp) |time, *tmp| {
+                tmp.* = maxTempAllowedContExec(t, p, time);
+            }
+        }
+        try plotting.simple(
+            &.{ &rem_time, &rem_time, &rem_time },
+            &.{ &max_temp[0], &max_temp[1], &max_temp[2] },
+            &.{
+                plotting.Aes{ .line_width = 3, .line_col = plotting.Color.red },
+                plotting.Aes{ .line_width = 3, .line_col = plotting.Color.green },
+                plotting.Aes{ .line_width = 3, .line_col = plotting.Color.blue },
+            },
+            .{ time_from - 5, time_to + 5 },
+            .{ -5, 105 },
+        );
+    }
+    test "tmds" {
+        var platform = testing_platform;
+        var dag = TaskDAG.init();
+        try dag.appendNode(testing_task);
+        try dag.appendNode(testing_task);
+        try dag.appendNode(testing_task);
+        try dag.connectNodes(0, 1, .{ .data_transfer = 100 });
+        try dag.connectNodes(0, 2, .{ .data_transfer = 100 });
+        // try dag.connectNodes(1, 2, .{ .data_transfer = 1 });
+
+        try tmds(&dag, &platform);
+
+        for (dag.nodes.items, 0..) |node, id| {
+            std.debug.print("{} == {}-{} on {}\n", .{
+                id,
+                node.data.actual_start_time.?,
+                node.data.actual_finish_time.?,
+                node.data.allocated_pid.?,
+            });
+        }
+        _ = 0;
+        try visualizeSchedule(dag, platform);
     }
 };
 

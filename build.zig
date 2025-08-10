@@ -33,8 +33,10 @@ pub fn build(b: *std.Build) void {
     const run_step = b.step("run", "Run the app");
     run_step.dependOn(&run_cmd.step);
 
+    const filter_opt = b.option([]const u8, "test-filter", "filter tests");
     const exe_unit_tests = b.addTest(.{
         .root_module = exe_mod,
+        .filters = if (filter_opt) |f| &.{f} else &.{},
     });
     exe_unit_tests.addCSourceFile(.{ .file = nanovg_dep.path("lib/gl2/src/glad.c"), .flags = &.{} });
     exe_unit_tests.addIncludePath(nanovg_dep.path("lib/gl2/include"));
