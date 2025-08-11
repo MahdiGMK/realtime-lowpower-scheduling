@@ -177,7 +177,6 @@ fn tett(t: Task, p: Processor, cur_time: f32, temp_ini: f32) struct { fin_t: f32
     var cur_t = cur_time + allowed_exec_time;
     const idle_t = coolingTime(p, p.temp_cutoff, p.temp_limit);
     allowed_exec_time = maximumDurationOfContExecution(t, p, p.temp_cutoff);
-    std.debug.print("{}\n", .{allowed_exec_time});
 
     while (rem_exec_time > 0) {
         if (rem_exec_time >= allowed_exec_time) {
@@ -194,16 +193,12 @@ fn tett(t: Task, p: Processor, cur_time: f32, temp_ini: f32) struct { fin_t: f32
     return .{ .fin_t = cur_t, .temp_fin = p.temp_limit };
 }
 
-const TMDS_Error = error{NoEntryPoint};
 fn tmds(graph: *TaskDAG, platform: *Platform) !void {
-    const entry = blk: {
-        for (graph.nodes.items) |*nd| {
-            if (nd.dependencies.items.len == 0) break :blk nd;
-        }
-        return TMDS_Error.NoEntryPoint;
-    };
     var task_list = std.ArrayList(*TaskDAG.Node).init(global.alloc);
-    try task_list.append(entry);
+    for (graph.nodes.items) |*nd|
+        if (nd.dependencies.items.len == 0)
+            try task_list.append(nd);
+
     while (task_list.items.len > 0) {
         const task = blk: {
             var tsk: *TaskDAG.Node = undefined;
@@ -606,14 +601,48 @@ const testing = struct {
             .{ -5, 105 },
         );
     }
+    test "tett" {
+        const sample_count = 1000;
+        const temp_from = 0.0;
+        const temp_to = 100.0;
+        var temp_init: [sample_count]f32 = undefined;
+        var final_temp: [Platform.NPROC][sample_count]f32 = undefined;
+        var final_time: [Platform.NPROC][sample_count]f32 = undefined;
+        var tt: f32 = temp_from;
+        for (&temp_init) |*temp| {
+            temp.* = tt;
+            tt += @as(comptime_float, temp_to - temp_from) / @as(comptime_float, sample_count);
+        }
+        for (testing_platform.processors, &final_temp, &final_time) |p, *p_tmp, *p_time| {
+            for (temp_init, p_tmp, p_time) |temp_ini, *tmp, *fin_t| {
+                const ttt = tett(testing_task, p, 0, temp_ini);
+                tmp.* = ttt.temp_fin;
+                fin_t.* = ttt.fin_t / 10;
+            }
+        }
+        try plotting.simple(
+            &.{ &temp_init, &temp_init, &temp_init, &temp_init, &temp_init, &temp_init },
+            &.{ &final_temp[0], &final_temp[1], &final_temp[2], &final_time[0], &final_time[1], &final_time[2] },
+            &.{
+                plotting.Aes{ .line_width = 3, .line_col = plotting.Color.red },
+                plotting.Aes{ .line_width = 3, .line_col = plotting.Color.green },
+                plotting.Aes{ .line_width = 3, .line_col = plotting.Color.blue },
+                plotting.Aes{ .line_width = 3, .line_col = plotting.Color.orange },
+                plotting.Aes{ .line_width = 3, .line_col = plotting.Color.cyan },
+                plotting.Aes{ .line_width = 3, .line_col = plotting.Color.pink },
+            },
+            .{ temp_from - 5, temp_to + 5 },
+            .{ -5, 105 },
+        );
+    }
     test "tmds" {
         var platform = testing_platform;
         var dag = TaskDAG.init();
         try dag.appendNode(testing_task);
-        try dag.appendNode(testing_task);
-        try dag.appendNode(testing_task);
-        try dag.connectNodes(0, 1, .{ .data_transfer = 100 });
-        try dag.connectNodes(0, 2, .{ .data_transfer = 100 });
+        // try dag.appendNode(testing_task);
+        // try dag.appendNode(testing_task);
+        // try dag.connectNodes(0, 1, .{ .data_transfer = 100 });
+        // try dag.connectNodes(0, 2, .{ .data_transfer = 100 });
         // try dag.connectNodes(1, 2, .{ .data_transfer = 1 });
 
         try tmds(&dag, &platform);
