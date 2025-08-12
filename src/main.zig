@@ -165,13 +165,13 @@ fn maxTempAllowedContExec(t: Task, p: Processor, rem_exec_time: f32) f32 { // OK
             @exp(-p.thermB() * rem_exec_time);
 }
 
-fn tett(t: Task, p: Processor, cur_time: f32, temp_ini: f32) struct { fin_t: f32, temp_fin: f32 } {
+fn tett(t: Task, p: Processor, cur_time: f32, temp_ini: f32) struct { fin_t: f32, fin_temp: f32 } {
     var allowed_exec_time = maximumDurationOfContExecution(t, p, temp_ini);
     const wcet = t.per_proc[p.pid].wcet;
     const tss = t.per_proc[p.pid].steady_state_temp;
     if (wcet <= allowed_exec_time) return .{
         .fin_t = cur_time + wcet,
-        .temp_fin = heatingTemp(p, tss, temp_ini, wcet),
+        .fin_temp = heatingTemp(p, tss, temp_ini, wcet),
     };
     var rem_exec_time = wcet - allowed_exec_time;
     var cur_t = cur_time + allowed_exec_time;
@@ -190,17 +190,18 @@ fn tett(t: Task, p: Processor, cur_time: f32, temp_ini: f32) struct { fin_t: f32
         }
         rem_exec_time -= allowed_exec_time;
     }
-    return .{ .fin_t = cur_t, .temp_fin = p.temp_limit };
+    return .{ .fin_t = cur_t, .fin_temp = p.temp_limit };
 }
 
-fn tmds(graph: *TaskDAG, platform: *Platform) !void {
+fn tmds(dag: *TaskDAG, platform: *Platform) !void {
     var task_list = std.ArrayList(*TaskDAG.Node).init(global.alloc);
-    for (graph.nodes.items) |*nd|
+    for (dag.nodes.items) |*nd|
         if (nd.dependencies.items.len == 0)
             try task_list.append(nd);
+    // task_list == sources(graph)
 
     while (task_list.items.len > 0) {
-        const task = blk: {
+        const task = extract_best_task: {
             var tsk: *TaskDAG.Node = undefined;
             var idx: usize = undefined;
             var rnk: f32 = 0;
@@ -213,28 +214,42 @@ fn tmds(graph: *TaskDAG, platform: *Platform) !void {
                 }
             }
             _ = task_list.swapRemove(idx);
-            break :blk tsk;
+            break :extract_best_task tsk;
         };
+        std.log.info("selected task : {}\n", .{task.data.id});
         var optproc: u8 = undefined;
         var opttemp: f32 = undefined;
         var optstrt: f32 = undefined;
+        var optfin: f32 = undefined;
         var optcompl = std.math.inf(f32);
         for (platform.processors) |proc| {
+            std.log.info("--checking proc{}\n", .{proc.pid});
             const sttime = effectiveStartTime(task, platform.*, proc);
+            std.log.info("  --start-time : {}\n", .{sttime});
             const temp_estim = coolingTemp(proc, proc.temp_cur, sttime - proc.avail);
+            std.log.info("  --start-temp : {}\n", .{temp_estim});
             const estim = tett(task.data, proc, sttime, temp_estim);
-            const schedule_compl_time = estim.fin_t + estim.fin_t + optimisticFinishTime(task, platform.*, proc);
+            std.log.info("  --end-temp : {}\n", .{estim.fin_temp});
+            std.log.info("  --end-time : {}\n", .{estim.fin_t});
+
+            const optimistic_dependant_completion =
+                optimisticFinishTime(task, platform.*, proc) -
+                task.data.per_proc[proc.pid].wcet;
+            const schedule_compl_time = estim.fin_t + optimistic_dependant_completion;
+            std.log.info("  --++dep-compl : {}\n", .{optimistic_dependant_completion});
+            std.log.info("  --++final-heuristic : {}\n", .{schedule_compl_time});
             if (optcompl > schedule_compl_time) {
                 optcompl = schedule_compl_time;
-                opttemp = estim.temp_fin;
+                opttemp = estim.fin_temp;
                 optstrt = sttime;
+                optfin = estim.fin_t;
                 optproc = proc.pid;
             }
         }
         task.data.allocated_pid = optproc;
         task.data.actual_start_time = optstrt;
-        task.data.actual_finish_time = optcompl;
-        platform.processors[optproc].avail = optcompl;
+        task.data.actual_finish_time = optfin;
+        platform.processors[optproc].avail = optfin;
         platform.processors[optproc].temp_cur = opttemp;
 
         for (task.dependants.items) |it| {
@@ -616,23 +631,37 @@ const testing = struct {
         for (testing_platform.processors, &final_temp, &final_time) |p, *p_tmp, *p_time| {
             for (temp_init, p_tmp, p_time) |temp_ini, *tmp, *fin_t| {
                 const ttt = tett(testing_task, p, 0, temp_ini);
-                tmp.* = ttt.temp_fin;
-                fin_t.* = ttt.fin_t / 10;
+                tmp.* = ttt.fin_temp;
+                fin_t.* = ttt.fin_t;
             }
         }
         try plotting.simple(
-            &.{ &temp_init, &temp_init, &temp_init, &temp_init, &temp_init, &temp_init },
-            &.{ &final_temp[0], &final_temp[1], &final_temp[2], &final_time[0], &final_time[1], &final_time[2] },
+            &.{
+                // &temp_init,
+                // &temp_init,
+                // &temp_init,
+                &temp_init,
+                &temp_init,
+                &temp_init,
+            },
+            &.{
+                // &final_temp[0],
+                // &final_temp[1],
+                // &final_temp[2],
+                &final_time[0],
+                &final_time[1],
+                &final_time[2],
+            },
             &.{
                 plotting.Aes{ .line_width = 3, .line_col = plotting.Color.red },
                 plotting.Aes{ .line_width = 3, .line_col = plotting.Color.green },
                 plotting.Aes{ .line_width = 3, .line_col = plotting.Color.blue },
-                plotting.Aes{ .line_width = 3, .line_col = plotting.Color.orange },
-                plotting.Aes{ .line_width = 3, .line_col = plotting.Color.cyan },
-                plotting.Aes{ .line_width = 3, .line_col = plotting.Color.pink },
+                // plotting.Aes{ .line_width = 3, .line_col = plotting.Color.orange },
+                // plotting.Aes{ .line_width = 3, .line_col = plotting.Color.cyan },
+                // plotting.Aes{ .line_width = 3, .line_col = plotting.Color.pink },
             },
             .{ temp_from - 5, temp_to + 5 },
-            .{ -5, 105 },
+            .{ -5, 1705 },
         );
     }
     test "tmds" {
@@ -656,7 +685,7 @@ const testing = struct {
             });
         }
         _ = 0;
-        try visualizeSchedule(dag, platform);
+        // try visualizeSchedule(dag, platform);
     }
 };
 
