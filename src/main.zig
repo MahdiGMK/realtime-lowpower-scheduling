@@ -261,6 +261,7 @@ fn tmds(dag: *TaskDAG, platform: *Platform) !void {
         }
     }
 }
+
 const Simulation = struct {
     const Event = struct {
         time: f32,
@@ -269,16 +270,18 @@ const Simulation = struct {
 
     event_lists: [Platform.NPROC]std.ArrayList(Event),
 };
-fn simulateSchedule(dag: TaskDAG, platform: Platform) !Simulation {
+fn simulateScheduleByTETT(dag: TaskDAG, platform: Platform) !Simulation {
     var sim = Simulation{ .event_lists = undefined };
     for (&sim.event_lists) |*e| {
-        e.* = try .initCapacity(global.alloc, 1);
+        e.* = try .initCapacity(global.alloc, 2);
+        try e.append(.{ .task_id = null, .time = -2 });
         try e.append(.{ .task_id = null, .time = -1 });
     }
 
     var proc_tasks = std.ArrayList(Task).init(global.alloc);
     defer proc_tasks.deinit();
 
+    var maxt: f32 = 0;
     for (platform.processors) |p| {
         proc_tasks.clearRetainingCapacity();
 
@@ -298,6 +301,7 @@ fn simulateSchedule(dag: TaskDAG, platform: Platform) !Simulation {
             time = task.actual_start_time.?;
             var rem_time = task.per_proc[p.pid].wcet;
             std.debug.print("proc,task -- {}:{}\n", .{ p.pid, task.id });
+            const max_iter_cont_exec = maximumDurationOfContExecution(task, p, p.temp_cutoff);
             while (rem_time > 0.1) {
                 try sim.event_lists[p.pid].append(.{
                     .task_id = task.id,
@@ -317,21 +321,28 @@ fn simulateSchedule(dag: TaskDAG, platform: Platform) !Simulation {
                 std.debug.print("run for {} => {}:{} , remtime:{}\n", .{ dur, time, temp, rem_time });
                 std.debug.assert(rem_time < 0.1 or @abs(temp - p.temp_limit) < 0.1);
 
-                if (dur >= rem_time - 0.001) break;
+                if (rem_time <= 0.001) break;
 
                 try sim.event_lists[p.pid].append(.{
                     .task_id = null,
                     .time = time,
                 });
 
-                const cool_dur = coolingTime(p, p.temp_cutoff, temp);
+                const cool_to_temp =
+                    if (rem_time <= max_iter_cont_exec)
+                        maxTempAllowedContExec(task, p, rem_time)
+                    else
+                        p.temp_cutoff;
+
+                const cool_dur = coolingTime(p, cool_to_temp, temp);
                 time += cool_dur;
                 temp = coolingTemp(p, temp, cool_dur);
-                std.debug.assert(@abs(temp - p.temp_cutoff) < 0.1);
+                std.debug.assert(@abs(temp - cool_to_temp) < 0.1);
             }
 
-            std.debug.print("was supposed to end in {}\n", .{task.actual_finish_time.?});
+            std.debug.print("was supposed to end in {} , time is : {}\n", .{ task.actual_finish_time.?, time });
             std.debug.assert(@abs(time - task.actual_finish_time.?) < 0.1);
+            time = task.actual_finish_time.?; // sync with scheduler
 
             time = task.actual_finish_time.?;
             try sim.event_lists[p.pid].append(.{
@@ -339,63 +350,159 @@ fn simulateSchedule(dag: TaskDAG, platform: Platform) !Simulation {
                 .time = time,
             });
         }
+        maxt = @max(maxt, time);
+    }
+    for (&sim.event_lists) |*evlist| {
+        try evlist.append(.{ .task_id = null, .time = maxt + 1 });
+    }
+
+    for (sim.event_lists, 0..) |evlist, pid| {
+        std.debug.print("proc {}\n", .{pid});
+        for (evlist.items) |it| {
+            std.debug.print("  --evt @{} : {any}\n", .{ it.time, it.task_id });
+        }
     }
 
     return sim;
 }
 fn visualizeSchedule(dag_inp: TaskDAG, platform_inp: Platform) !void {
-    const Ctx = struct { dag: *const TaskDAG, platform: *const Platform, maxt: f32 };
-    const sim = try simulateSchedule(dag_inp, platform_inp);
-    _ = sim; // autofix
+    const Ctx = struct {
+        dag: *const TaskDAG,
+        platform: *const Platform,
+        maxt: f32,
+        proc_temp_graph: [Platform.NPROC][2][]f32,
+        sim: Simulation,
+    };
+    const simul = try simulateScheduleByTETT(dag_inp, platform_inp);
+
+    const temp_sample_per_event = 25;
+    var proc_temp_graph: [Platform.NPROC][2][]f32 = undefined;
+    for (&proc_temp_graph, platform_inp.processors, simul.event_lists) |*mem_xy, proc, evlist| {
+        const pid = proc.pid;
+        var xarr = try std.ArrayList(f32).initCapacity(
+            global.alloc,
+            temp_sample_per_event * evlist.items.len,
+        );
+        var yarr = try std.ArrayList(f32).initCapacity(
+            global.alloc,
+            temp_sample_per_event * evlist.items.len,
+        );
+        defer mem_xy[0] = xarr.toOwnedSlice() catch unreachable;
+        defer mem_xy[1] = yarr.toOwnedSlice() catch unreachable;
+
+        var ttime = evlist.items[0].time;
+        var temp: f32 = TEMP_AMBIANT;
+        var sstemp: f32 = TEMP_AMBIANT;
+
+        std.debug.print("+proc:{}\n", .{pid});
+
+        const evlen = evlist.items.len;
+        for (evlist.items[0 .. evlen - 1], evlist.items[1..]) |evt, nxt_evt| {
+            const delta_time: f32 = (nxt_evt.time - ttime) / temp_sample_per_event;
+            sstemp = if (evt.task_id) |tid|
+                dag_inp.nodes.items[tid].data.per_proc[pid].steady_state_temp
+            else
+                TEMP_AMBIANT;
+            for (0..temp_sample_per_event) |_| {
+                temp = heatingTemp(proc, sstemp, temp, delta_time);
+                ttime += delta_time;
+                try xarr.append(ttime);
+                try yarr.append(@as(f32, @floatFromInt(pid)) +
+                    (temp - TEMP_AMBIANT) / (proc.temp_limit - TEMP_AMBIANT));
+                // std.debug.print("--xarr <- {}\n", .{ttime});
+            }
+        }
+    }
 
     const Static = struct {
+        var prng = std.Random.DefaultPrng.init(0);
+        const rnd = prng.random();
+        fn taskColor(tid: usize) plotting.nvg.Color {
+            prng.seed(@intCast(tid));
+            const hue = rnd.float(f32);
+            return plotting.nvg.hsl(hue, 1, 0.5);
+        }
         fn onDraw(ctx: *anyopaque, fig: *plotting.Figure, ax: *plotting.Axes, plt: *plotting.Plot) void {
             _ = fig; // autofix
             ax.draw();
             const typed_ctx: *const Ctx = @ptrCast(@alignCast(ctx));
             const dag = typed_ctx.dag;
+            _ = dag; // autofix
             const platform = typed_ctx.platform;
             const maxt = typed_ctx.maxt;
+            _ = maxt; // autofix
+            const sim = typed_ctx.sim;
+            const graphs = typed_ctx.proc_temp_graph;
 
-            for (dag.nodes.items) |it| {
-                plotting.rect(
-                    ax,
-                    plt.vg,
-                    it.data.actual_start_time.?,
-                    @as(f32, @floatFromInt(it.data.allocated_pid.?)) + 0.95,
-                    it.data.actual_finish_time.? - it.data.actual_start_time.?,
-                    0.9,
-                    plotting.Color.green,
-                );
-            }
-
-            const time_sample_count = 1000;
-            for (platform.processors) |p| {
-                var time: f32 = 0;
-                var temp: f32 = TEMP_AMBIANT;
-                var xx: [time_sample_count]f32 = undefined;
-                var yy: [time_sample_count]f32 = undefined;
-                xx[0] = time;
-                yy[0] = temp;
-                const delta_time = maxt / time_sample_count;
-                var is_active = true;
-                for (xx[1..], yy[1..], yy[0 .. yy.len - 1]) |*x, *y, py| {
-                    _ = py; // autofix
-                    time += delta_time;
-                    x.* = time;
-                    temp = if (is_active) heatingTemp(
-                        p,
-                        dag.nodes.items[1].data.per_proc[p.pid].steady_state_temp,
-                        temp,
-                        delta_time,
-                    ) else coolingTemp(p, temp, delta_time);
-                    if (temp > p.temp_limit) is_active = false;
-                    if (temp < p.temp_cutoff) is_active = true;
-                    y.* = (temp - TEMP_AMBIANT) / (p.temp_limit - TEMP_AMBIANT) + @as(f32, @floatFromInt(p.pid));
+            for (sim.event_lists, 0..) |evlist, pid| {
+                const evlen = evlist.items.len;
+                for (evlist.items[0 .. evlen - 1], evlist.items[1..]) |evt, nxt_evt| {
+                    if (evt.task_id) |tid| {
+                        plotting.rect(
+                            ax,
+                            plt.vg,
+                            evt.time,
+                            @as(f32, @floatFromInt(pid)) + 0.95,
+                            nxt_evt.time - evt.time,
+                            0.9,
+                            taskColor(tid),
+                        );
+                        var tidbuf: [16]u8 = undefined;
+                        const tidstr =
+                            std.fmt.bufPrint(&tidbuf, "task{}", .{tid}) catch unreachable;
+                        ax.text(
+                            (evt.time * 1.5 + nxt_evt.time) / 2.5,
+                            @as(f32, @floatFromInt(pid)) + 0.5,
+                            .{ .str = tidstr },
+                        );
+                    }
                 }
-                plt.aes.line_width = 5;
-                plt.plot(&xx, &yy);
             }
+            // for (dag.nodes.items) |it| {
+            //     plotting.rect(
+            //         ax,
+            //         plt.vg,
+            //         it.data.actual_start_time.?,
+            //         @as(f32, @floatFromInt(it.data.allocated_pid.?)) + 0.95,
+            //         it.data.actual_finish_time.? - it.data.actual_start_time.?,
+            //         0.9,
+            //         plotting.Color.green,
+            //     );
+            // }
+
+            plt.aes.line_width = 5;
+            for (platform.processors, graphs) |proc, grp| {
+                _ = proc; // autofix
+                if (grp[0].len > 0)
+                    plt.plot(grp[0], grp[1]);
+            }
+
+            // for (platform.processors) |p| {
+            //     var time: f32 = 0;
+            //     var temp: f32 = TEMP_AMBIANT;
+            //     var xx: [time_sample_count]f32 = undefined;
+            //     var yy: [time_sample_count]f32 = undefined;
+            //     xx[0] = time;
+            //     yy[0] = temp;
+            //     const delta_time = maxt / time_sample_count;
+            //     var is_active = true;
+            //     for (xx[1..], yy[1..], yy[0 .. yy.len - 1]) |*x, *y, py| {
+            //         _ = py; // autofix
+            //         time += delta_time;
+            //         x.* = time;
+            //         temp = if (is_active) heatingTemp(
+            //             p,
+            //             dag.nodes.items[1].data.per_proc[p.pid].steady_state_temp,
+            //             temp,
+            //             delta_time,
+            //         ) else coolingTemp(p, temp, delta_time);
+            //         if (temp > p.temp_limit) is_active = false;
+            //         if (temp < p.temp_cutoff) is_active = true;
+            //         y.* = (temp - TEMP_AMBIANT) / (p.temp_limit - TEMP_AMBIANT) + @as(f32, @floatFromInt(p.pid));
+            //     }
+            //     plt.aes.line_width = 5;
+            //     plt.plot(&xx, &yy);
+            // }
 
             ax.drawGrid();
         }
@@ -410,6 +517,8 @@ fn visualizeSchedule(dag_inp: TaskDAG, platform_inp: Platform) !void {
         .dag = &dag_inp,
         .platform = &platform_inp,
         .maxt = maxt,
+        .proc_temp_graph = proc_temp_graph,
+        .sim = simul,
     };
     try plotting.complexSingle(
         @constCast(&ctx),
@@ -478,12 +587,22 @@ pub fn main() !void {
 }
 
 const testing = struct {
+    fn update(value: anytype, updated_terms: anytype) @TypeOf(value) {
+        const T = @TypeOf(value);
+        const flds: []const std.builtin.Type.StructField = std.meta.fields(T);
+        var updated: T = value;
+        inline for (flds) |fld| {
+            if (@hasField(@TypeOf(updated_terms), fld.name))
+                @field(updated, fld.name) = @field(updated_terms, fld.name);
+        }
+        return updated;
+    }
     const testing_task = Task{
         .id = 0,
         .per_proc = .{
-            .{ .wcet = 1000 / 2, .steady_state_temp = 90 }, // p0
-            .{ .wcet = 1000 / 2, .steady_state_temp = 80 }, // p1
-            .{ .wcet = 3000 / 2, .steady_state_temp = 50 }, // p2
+            .{ .wcet = 1000, .steady_state_temp = 90 }, // p0
+            .{ .wcet = 1200, .steady_state_temp = 80 }, // p1
+            .{ .wcet = 3000, .steady_state_temp = 50 }, // p2
         },
     };
     const testing_platform = Platform{ .processors = .{
@@ -667,8 +786,11 @@ const testing = struct {
     test "tmds" {
         var platform = testing_platform;
         var dag = TaskDAG.init();
-        try dag.appendNode(testing_task);
-        // try dag.appendNode(testing_task);
+        try dag.appendNode(update(testing_task, .{ .id = 0 }));
+        try dag.appendNode(update(testing_task, .{ .id = 1 }));
+        try dag.appendNode(update(testing_task, .{ .id = 2 }));
+        try dag.appendNode(update(testing_task, .{ .id = 3 }));
+        try dag.appendNode(update(testing_task, .{ .id = 4 }));
         // try dag.appendNode(testing_task);
         // try dag.connectNodes(0, 1, .{ .data_transfer = 100 });
         // try dag.connectNodes(0, 2, .{ .data_transfer = 100 });
@@ -676,6 +798,9 @@ const testing = struct {
 
         try tmds(&dag, &platform);
 
+        std.debug.print("tett : {}\n", .{
+            tett(testing_task, platform.processors[0], 0, TEMP_AMBIANT),
+        });
         for (dag.nodes.items, 0..) |node, id| {
             std.debug.print("{} == {}-{} on {}\n", .{
                 id,
@@ -685,7 +810,7 @@ const testing = struct {
             });
         }
         _ = 0;
-        // try visualizeSchedule(dag, platform);
+        try visualizeSchedule(dag, platform);
     }
 };
 
