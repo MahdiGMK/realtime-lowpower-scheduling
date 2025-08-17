@@ -1,6 +1,8 @@
 const std = @import("std");
 const plotting = @import("plotting.zig");
 
+const ArrayList = std.ArrayListUnmanaged;
+
 const global = struct {
     var gpa = std.heap.DebugAllocator(.{}).init;
     const alloc = gpa.allocator();
@@ -50,29 +52,29 @@ fn DAG(comptime NodeData: type, comptime EdgeData: type) type {
         pub const Node = struct {
             data: NodeData,
             solved_deps: usize = 0,
-            dependencies: std.ArrayList(struct { *Node, EdgeData }),
-            dependants: std.ArrayList(struct { *Node, EdgeData }),
+            dependencies: ArrayList(struct { *Node, EdgeData }),
+            dependants: ArrayList(struct { *Node, EdgeData }),
             const Nd = @This();
             fn init(data: NodeData) Nd {
                 return Nd{
                     .data = data,
-                    .dependencies = .init(global.alloc),
-                    .dependants = .init(global.alloc),
+                    .dependencies = .empty,
+                    .dependants = .empty,
                 };
             }
         };
-        nodes: std.ArrayList(Node),
+        nodes: ArrayList(Node),
         fn init() Graph {
-            return Graph{ .nodes = .init(global.alloc) };
+            return Graph{ .nodes = .empty };
         }
         fn appendNode(self: *Graph, data: NodeData) !void {
-            try self.nodes.append(Node.init(data));
+            try self.nodes.append(global.alloc, Node.init(data));
         }
         fn connectNodes(self: *Graph, dependency: usize, dependant: usize, edge: EdgeData) !void {
             const dency = @constCast(&self.nodes.items[dependency]);
             const dant = @constCast(&self.nodes.items[dependant]);
-            try dant.dependencies.append(.{ dency, edge });
-            try dency.dependants.append(.{ dant, edge });
+            try dant.dependencies.append(global.alloc, .{ dency, edge });
+            try dency.dependants.append(global.alloc, .{ dant, edge });
         }
     };
 }
@@ -194,10 +196,10 @@ fn tett(t: Task, p: Processor, cur_time: f32, temp_ini: f32) struct { fin_t: f32
 }
 
 fn tmds(dag: *TaskDAG, platform: *Platform) !void {
-    var task_list = std.ArrayList(*TaskDAG.Node).init(global.alloc);
+    var task_list = ArrayList(*TaskDAG.Node).empty;
     for (dag.nodes.items) |*nd|
         if (nd.dependencies.items.len == 0)
-            try task_list.append(nd);
+            try task_list.append(global.alloc, nd);
     // task_list == sources(graph)
 
     while (task_list.items.len > 0) {
@@ -256,7 +258,7 @@ fn tmds(dag: *TaskDAG, platform: *Platform) !void {
             const nd, _ = it;
             nd.solved_deps += 1;
             if (nd.solved_deps == nd.dependencies.items.len) {
-                try task_list.append(nd);
+                try task_list.append(global.alloc, nd);
             }
         }
     }
@@ -268,24 +270,24 @@ const Simulation = struct {
         task_id: ?usize,
     };
 
-    event_lists: [Platform.NPROC]std.ArrayList(Event),
+    event_lists: [Platform.NPROC]ArrayList(Event),
 };
 fn simulateScheduleByTETT(dag: TaskDAG, platform: Platform) !Simulation {
     var sim = Simulation{ .event_lists = undefined };
     for (&sim.event_lists) |*e| {
         e.* = try .initCapacity(global.alloc, 2);
-        try e.append(.{ .task_id = null, .time = -2 });
-        try e.append(.{ .task_id = null, .time = -1 });
+        try e.append(global.alloc, .{ .task_id = null, .time = -2 });
+        try e.append(global.alloc, .{ .task_id = null, .time = -1 });
     }
 
-    var proc_tasks = std.ArrayList(Task).init(global.alloc);
-    defer proc_tasks.deinit();
+    var proc_tasks = ArrayList(Task).empty;
+    defer proc_tasks.deinit(global.alloc);
 
     var maxt: f32 = 0;
     for (platform.processors) |p| {
         proc_tasks.clearRetainingCapacity();
 
-        for (dag.nodes.items) |nd| if (nd.data.allocated_pid == p.pid) try proc_tasks.append(nd.data);
+        for (dag.nodes.items) |nd| if (nd.data.allocated_pid == p.pid) try proc_tasks.append(global.alloc, nd.data);
 
         const Static = struct {
             fn taskLessThan(_: void, a: Task, b: Task) bool {
@@ -303,7 +305,7 @@ fn simulateScheduleByTETT(dag: TaskDAG, platform: Platform) !Simulation {
             std.debug.print("proc,task -- {}:{}\n", .{ p.pid, task.id });
             const max_iter_cont_exec = maximumDurationOfContExecution(task, p, p.temp_cutoff);
             while (rem_time > 0.1) {
-                try sim.event_lists[p.pid].append(.{
+                try sim.event_lists[p.pid].append(global.alloc, .{
                     .task_id = task.id,
                     .time = time,
                 });
@@ -323,7 +325,7 @@ fn simulateScheduleByTETT(dag: TaskDAG, platform: Platform) !Simulation {
 
                 if (rem_time <= 0.001) break;
 
-                try sim.event_lists[p.pid].append(.{
+                try sim.event_lists[p.pid].append(global.alloc, .{
                     .task_id = null,
                     .time = time,
                 });
@@ -345,7 +347,7 @@ fn simulateScheduleByTETT(dag: TaskDAG, platform: Platform) !Simulation {
             time = task.actual_finish_time.?; // sync with scheduler
 
             time = task.actual_finish_time.?;
-            try sim.event_lists[p.pid].append(.{
+            try sim.event_lists[p.pid].append(global.alloc, .{
                 .task_id = null,
                 .time = time,
             });
@@ -353,7 +355,7 @@ fn simulateScheduleByTETT(dag: TaskDAG, platform: Platform) !Simulation {
         maxt = @max(maxt, time);
     }
     for (&sim.event_lists) |*evlist| {
-        try evlist.append(.{ .task_id = null, .time = maxt + 1 });
+        try evlist.append(global.alloc, .{ .task_id = null, .time = maxt + 1 });
     }
 
     for (sim.event_lists, 0..) |evlist, pid| {
@@ -379,16 +381,16 @@ fn visualizeSchedule(dag_inp: TaskDAG, platform_inp: Platform) !void {
     var proc_temp_graph: [Platform.NPROC][2][]f32 = undefined;
     for (&proc_temp_graph, platform_inp.processors, simul.event_lists) |*mem_xy, proc, evlist| {
         const pid = proc.pid;
-        var xarr = try std.ArrayList(f32).initCapacity(
+        var xarr = try ArrayList(f32).initCapacity(
             global.alloc,
             temp_sample_per_event * evlist.items.len,
         );
-        var yarr = try std.ArrayList(f32).initCapacity(
+        var yarr = try ArrayList(f32).initCapacity(
             global.alloc,
             temp_sample_per_event * evlist.items.len,
         );
-        defer mem_xy[0] = xarr.toOwnedSlice() catch unreachable;
-        defer mem_xy[1] = yarr.toOwnedSlice() catch unreachable;
+        defer mem_xy[0] = xarr.toOwnedSlice(global.alloc) catch unreachable;
+        defer mem_xy[1] = yarr.toOwnedSlice(global.alloc) catch unreachable;
 
         var ttime = evlist.items[0].time;
         var temp: f32 = TEMP_AMBIANT;
@@ -406,10 +408,9 @@ fn visualizeSchedule(dag_inp: TaskDAG, platform_inp: Platform) !void {
             for (0..temp_sample_per_event) |_| {
                 temp = heatingTemp(proc, sstemp, temp, delta_time);
                 ttime += delta_time;
-                try xarr.append(ttime);
-                try yarr.append(@as(f32, @floatFromInt(pid)) +
+                try xarr.append(global.alloc, ttime);
+                try yarr.append(global.alloc, @as(f32, @floatFromInt(pid)) +
                     (temp - TEMP_AMBIANT) / (proc.temp_limit - TEMP_AMBIANT));
-                // std.debug.print("--xarr <- {}\n", .{ttime});
             }
         }
     }
@@ -422,15 +423,12 @@ fn visualizeSchedule(dag_inp: TaskDAG, platform_inp: Platform) !void {
             const hue = rnd.float(f32);
             return plotting.nvg.hsl(hue, 1, 0.5);
         }
-        fn onDraw(ctx: *anyopaque, fig: *plotting.Figure, ax: *plotting.Axes, plt: *plotting.Plot) void {
-            _ = fig; // autofix
+        fn onDraw(ctx: *anyopaque, _: *plotting.Figure, ax: *plotting.Axes, plt: *plotting.Plot) void {
             ax.draw();
             const typed_ctx: *const Ctx = @ptrCast(@alignCast(ctx));
-            const dag = typed_ctx.dag;
-            _ = dag; // autofix
+            _ = typed_ctx.dag;
             const platform = typed_ctx.platform;
-            const maxt = typed_ctx.maxt;
-            _ = maxt; // autofix
+            _ = typed_ctx.maxt;
             const sim = typed_ctx.sim;
             const graphs = typed_ctx.proc_temp_graph;
 
@@ -458,51 +456,12 @@ fn visualizeSchedule(dag_inp: TaskDAG, platform_inp: Platform) !void {
                     }
                 }
             }
-            // for (dag.nodes.items) |it| {
-            //     plotting.rect(
-            //         ax,
-            //         plt.vg,
-            //         it.data.actual_start_time.?,
-            //         @as(f32, @floatFromInt(it.data.allocated_pid.?)) + 0.95,
-            //         it.data.actual_finish_time.? - it.data.actual_start_time.?,
-            //         0.9,
-            //         plotting.Color.green,
-            //     );
-            // }
 
             plt.aes.line_width = 5;
-            for (platform.processors, graphs) |proc, grp| {
-                _ = proc; // autofix
+            for (platform.processors, graphs) |_, grp| {
                 if (grp[0].len > 0)
                     plt.plot(grp[0], grp[1]);
             }
-
-            // for (platform.processors) |p| {
-            //     var time: f32 = 0;
-            //     var temp: f32 = TEMP_AMBIANT;
-            //     var xx: [time_sample_count]f32 = undefined;
-            //     var yy: [time_sample_count]f32 = undefined;
-            //     xx[0] = time;
-            //     yy[0] = temp;
-            //     const delta_time = maxt / time_sample_count;
-            //     var is_active = true;
-            //     for (xx[1..], yy[1..], yy[0 .. yy.len - 1]) |*x, *y, py| {
-            //         _ = py; // autofix
-            //         time += delta_time;
-            //         x.* = time;
-            //         temp = if (is_active) heatingTemp(
-            //             p,
-            //             dag.nodes.items[1].data.per_proc[p.pid].steady_state_temp,
-            //             temp,
-            //             delta_time,
-            //         ) else coolingTemp(p, temp, delta_time);
-            //         if (temp > p.temp_limit) is_active = false;
-            //         if (temp < p.temp_cutoff) is_active = true;
-            //         y.* = (temp - TEMP_AMBIANT) / (p.temp_limit - TEMP_AMBIANT) + @as(f32, @floatFromInt(p.pid));
-            //     }
-            //     plt.aes.line_width = 5;
-            //     plt.plot(&xx, &yy);
-            // }
 
             ax.drawGrid();
         }
@@ -792,9 +751,9 @@ const testing = struct {
         try dag.appendNode(update(testing_task, .{ .id = 3 }));
         try dag.appendNode(update(testing_task, .{ .id = 4 }));
         // try dag.appendNode(testing_task);
-        // try dag.connectNodes(0, 1, .{ .data_transfer = 100 });
-        // try dag.connectNodes(0, 2, .{ .data_transfer = 100 });
-        // try dag.connectNodes(1, 2, .{ .data_transfer = 1 });
+        try dag.connectNodes(0, 1, .{ .data_transfer = 100 });
+        try dag.connectNodes(0, 2, .{ .data_transfer = 100 });
+        try dag.connectNodes(1, 2, .{ .data_transfer = 1 });
 
         try tmds(&dag, &platform);
 
