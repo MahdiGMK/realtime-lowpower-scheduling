@@ -10,8 +10,7 @@ const global = struct {
 const Processor = struct {
     pid: u8,
     temp_limit: f32,
-    temp_cutoff: f32,
-    power_mode_switching_time: f32 = 0.000_001 * 80, // 80us according to the paper
+    power_mode_switching_time: f32 = 0.0_1 * 80, // 80us according to the paper
     avail: f32 = 0,
     temp_cur: f32 = TEMP_AMBIANT,
     thermo: struct {
@@ -37,7 +36,11 @@ const Platform = struct {
 };
 const Task = struct {
     id: usize,
-    per_proc: [Platform.NPROC]struct { wcet: f32, steady_state_temp: f32, optimistic_finish_time: ?f32 = null },
+    per_proc: [Platform.NPROC]struct {
+        wcet: f32,
+        steady_state_temp: f32,
+        optimistic_finish_time: ?f32 = null,
+    },
     allocated_pid: ?u8 = null,
     actual_start_time: ?f32 = null,
     actual_finish_time: ?f32 = null,
@@ -128,7 +131,7 @@ fn effectiveStartTime(n: *const TaskDAG.Node, platform: Platform, p: Processor) 
 fn maximumDurationOfContExecution(t: Task, p: Processor, temp_ini: f32) f32 { // OK
     const temp_steady = t.per_proc[p.pid].steady_state_temp;
     if (temp_ini > p.temp_limit) return 0;
-    if (temp_steady < p.temp_limit) {
+    if (temp_steady <= p.temp_limit) {
         return std.math.inf(f32);
     }
     const res: f32 = -1.0 / p.thermB() * @log((p.temp_limit - temp_steady) / (temp_ini - temp_steady));
@@ -154,7 +157,7 @@ fn numberOfCoollingIntervals(t: Task, p: Processor, temp_est: f32) usize { // OK
     if (first_cycle >= wcet) return 0;
 
     const after_first = wcet - first_cycle;
-    const run_cycle_dur = maximumDurationOfContExecution(t, p, p.temp_cutoff);
+    const run_cycle_dur = maximumDurationOfContExecution(t, p, optimalCooldown(t, p));
     const res = after_first / run_cycle_dur;
     return @intFromFloat(@floor(res) + 1);
 }
@@ -166,7 +169,53 @@ fn maxTempAllowedContExec(t: Task, p: Processor, rem_exec_time: f32) f32 { // OK
         (p.temp_limit - t.per_proc[p.pid].steady_state_temp) /
             @exp(-p.thermB() * rem_exec_time);
 }
+fn optimalCooldown(t: Task, p: Processor) f32 {
+    // execution is split into regions of
+    // power_mode_switching_time|coolingTime|maximumDurationOfContExecution(Actual work)|power_mode_switching_time
+    // so we want to optimize the ratio of "Actual work" compared to the total duration of cycle
+    //
+    // we should optimize :
+    // f(c) = maximumDurationOfContExecution/(2*power_mode_switching_time+coolingTime+maximumDurationOfContExecution)
+    // =>
+    // L: p.temp_limit
+    // B: -1.0 / p.thermB()
+    // A: TEMP_AMBIANT
+    // x: cutoff
+    // H: t.temp_steady
+    // S: p.power_mode_switching_time
+    // maxDur:   B * @log((L - H) / (x - H));
+    // coolTime: B * @log((x - A) / (L - A));
+    // find optimum using ternary search
+    //
 
+    const Sample = struct {
+        fn func(
+            task: Task,
+            proc: Processor,
+            temp_cutoff: f32,
+        ) f32 {
+            const maxDur = maximumDurationOfContExecution(task, proc, temp_cutoff);
+            const coolT = coolingTime(proc, temp_cutoff, proc.temp_limit);
+            return maxDur / (coolT + maxDur + 2 * proc.power_mode_switching_time);
+        }
+    };
+    var l: f32 = TEMP_AMBIANT;
+    var r: f32 = p.temp_limit;
+    const NUM_ITER = 20;
+    for (0..NUM_ITER) |_| {
+        const mid1 = (l + r) / 2;
+        const mid2 = mid1 + 0.001;
+        const f1 = Sample.func(t, p, mid1);
+        const f2 = Sample.func(t, p, mid2);
+        if (@abs(f1 - f2) < 0.001) {
+            return if (f1 > f2) mid1 else mid2;
+        }
+        if (f1 < f2) {
+            l = mid1;
+        } else r = mid2;
+    }
+    return l;
+}
 fn tett(t: Task, p: Processor, cur_time: f32, temp_ini: f32) struct { fin_t: f32, fin_temp: f32 } {
     var allowed_exec_time = maximumDurationOfContExecution(t, p, temp_ini);
     const wcet = t.per_proc[p.pid].wcet;
@@ -177,8 +226,8 @@ fn tett(t: Task, p: Processor, cur_time: f32, temp_ini: f32) struct { fin_t: f32
     };
     var rem_exec_time = wcet - allowed_exec_time;
     var cur_t = cur_time + allowed_exec_time;
-    const idle_t = coolingTime(p, p.temp_cutoff, p.temp_limit);
-    allowed_exec_time = maximumDurationOfContExecution(t, p, p.temp_cutoff);
+    const idle_t = coolingTime(p, optimalCooldown(t, p), p.temp_limit);
+    allowed_exec_time = maximumDurationOfContExecution(t, p, optimalCooldown(t, p));
 
     while (rem_exec_time > 0) {
         if (rem_exec_time >= allowed_exec_time) {
@@ -303,7 +352,7 @@ fn simulateScheduleByTETT(dag: TaskDAG, platform: Platform) !Simulation {
             time = task.actual_start_time.?;
             var rem_time = task.per_proc[p.pid].wcet;
             std.debug.print("proc,task -- {}:{}\n", .{ p.pid, task.id });
-            const max_iter_cont_exec = maximumDurationOfContExecution(task, p, p.temp_cutoff);
+            const max_iter_cont_exec = maximumDurationOfContExecution(task, p, optimalCooldown(task, p));
             while (rem_time > 0.1) {
                 try sim.event_lists[p.pid].append(global.alloc, .{
                     .task_id = task.id,
@@ -334,10 +383,10 @@ fn simulateScheduleByTETT(dag: TaskDAG, platform: Platform) !Simulation {
                     if (rem_time <= max_iter_cont_exec)
                         maxTempAllowedContExec(task, p, rem_time)
                     else
-                        p.temp_cutoff;
+                        optimalCooldown(task, p);
 
                 const cool_dur = coolingTime(p, cool_to_temp, temp);
-                time += cool_dur;
+                time += 2 * p.power_mode_switching_time + cool_dur;
                 temp = coolingTemp(p, temp, cool_dur);
                 std.debug.assert(@abs(temp - cool_to_temp) < 0.1);
             }
@@ -447,17 +496,17 @@ fn visualizeSchedule(dag_inp: TaskDAG, platform_inp: Platform) !void {
                         );
                         var tidbuf: [16]u8 = undefined;
                         const tidstr =
-                            std.fmt.bufPrint(&tidbuf, "task{}", .{tid}) catch unreachable;
+                            std.fmt.bufPrint(&tidbuf, "t{}", .{tid}) catch unreachable;
                         ax.text(
-                            (evt.time * 1.5 + nxt_evt.time) / 2.5,
+                            (evt.time + nxt_evt.time) / 2,
                             @as(f32, @floatFromInt(pid)) + 0.5,
-                            .{ .str = tidstr },
+                            .{ .str = tidstr, .alignment = .{ .horizontal = .center, .vertical = .middle } },
                         );
                     }
                 }
             }
 
-            plt.aes.line_width = 5;
+            plt.aes.line_width = 2;
             for (platform.processors, graphs) |_, grp| {
                 if (grp[0].len > 0)
                     plt.plot(grp[0], grp[1]);
@@ -490,9 +539,9 @@ const MAX_BW = 1e6;
 pub fn main() !void {
     // Platform.NPROC = 3
     var platform = Platform{ .processors = .{
-        .{ .pid = 0, .temp_limit = 80, .temp_cutoff = 60, .thermo = .init(2.332, 13.1568, 0.1754, 0.68, 380, 2.6) },
-        .{ .pid = 1, .temp_limit = 70, .temp_cutoff = 50, .thermo = .init(2.138, 5.0187, 0.1942, 0.487, 295, 3.4) },
-        .{ .pid = 2, .temp_limit = 60, .temp_cutoff = 40, .thermo = .init(4.556, 15.6262, 0.1942, 0.238, 320, 3.0) },
+        .{ .pid = 0, .temp_limit = 80, .thermo = .init(2.332, 13.1568, 0.1754, 0.68, 380, 2.6) },
+        .{ .pid = 1, .temp_limit = 70, .thermo = .init(2.138, 5.0187, 0.1942, 0.487, 295, 3.4) },
+        .{ .pid = 2, .temp_limit = 60, .thermo = .init(4.556, 15.6262, 0.1942, 0.238, 320, 3.0) },
     }, .communication_bw = .{
         .{ MAX_BW, 2, 2 },
         .{ 2, MAX_BW, 2 },
@@ -556,18 +605,29 @@ const testing = struct {
         }
         return updated;
     }
-    const testing_task = Task{
-        .id = 0,
-        .per_proc = .{
-            .{ .wcet = 1000, .steady_state_temp = 90 }, // p0
-            .{ .wcet = 1200, .steady_state_temp = 80 }, // p1
-            .{ .wcet = 3000, .steady_state_temp = 50 }, // p2
+    const testing_tasks = &.{
+        Task{
+            .id = 0,
+            .per_proc = .{
+                .{ .wcet = 2000, .steady_state_temp = 100 }, // p0
+                .{ .wcet = 2000, .steady_state_temp = 100 }, // p1
+                .{ .wcet = 2000, .steady_state_temp = 100 }, // p2
+            },
+        },
+        Task{
+            .id = 0,
+            .per_proc = .{
+                .{ .wcet = 800, .steady_state_temp = 300 }, // p0
+                .{ .wcet = 800, .steady_state_temp = 300 }, // p1
+                .{ .wcet = 900, .steady_state_temp = 300 }, // p2
+            },
         },
     };
+    const testing_task = testing_tasks[0];
     const testing_platform = Platform{ .processors = .{
-        .{ .pid = 0, .temp_limit = 80, .temp_cutoff = 60, .thermo = .init(2.332, 13.1568, 0.1754, 0.68, 380, 2.6) },
-        .{ .pid = 1, .temp_limit = 70, .temp_cutoff = 50, .thermo = .init(2.138, 5.0187, 0.1942, 0.487, 295, 3.4) },
-        .{ .pid = 2, .temp_limit = 60, .temp_cutoff = 40, .thermo = .init(4.556, 15.6262, 0.1942, 0.238, 320, 3.0) },
+        .{ .pid = 0, .temp_limit = 80, .thermo = .init(2.332, 13.1568, 0.1754, 0.68, 380, 2.6) },
+        .{ .pid = 1, .temp_limit = 70, .thermo = .init(2.138, 5.0187, 0.1942, 0.487, 295, 3.4) },
+        .{ .pid = 2, .temp_limit = 60, .thermo = .init(4.556, 15.6262, 0.1942, 0.238, 320, 3.0) },
     }, .communication_bw = .{
         .{ MAX_BW, 2, 2 },
         .{ 2, MAX_BW, 2 },
@@ -694,7 +754,7 @@ const testing = struct {
             .{ -5, 105 },
         );
     }
-    test "tett" {
+    test "tett" { // OK
         const sample_count = 1000;
         const temp_from = 0.0;
         const temp_to = 100.0;
@@ -745,11 +805,11 @@ const testing = struct {
     test "tmds" {
         var platform = testing_platform;
         var dag = TaskDAG.init();
-        try dag.appendNode(update(testing_task, .{ .id = 0 }));
-        try dag.appendNode(update(testing_task, .{ .id = 1 }));
-        try dag.appendNode(update(testing_task, .{ .id = 2 }));
-        try dag.appendNode(update(testing_task, .{ .id = 3 }));
-        try dag.appendNode(update(testing_task, .{ .id = 4 }));
+        try dag.appendNode(update(testing_tasks[0], .{ .id = 0 }));
+        try dag.appendNode(update(testing_tasks[1], .{ .id = 1 }));
+        try dag.appendNode(update(testing_tasks[0], .{ .id = 2 }));
+        try dag.appendNode(update(testing_tasks[1], .{ .id = 3 }));
+        try dag.appendNode(update(testing_tasks[0], .{ .id = 4 }));
         // try dag.appendNode(testing_task);
         try dag.connectNodes(0, 1, .{ .data_transfer = 100 });
         try dag.connectNodes(0, 2, .{ .data_transfer = 100 });
