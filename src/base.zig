@@ -32,6 +32,7 @@ pub const Platform = struct {
     pub const NPROC = 3;
     processors: [NPROC]Processor,
     communication_bw: [NPROC][NPROC]f32,
+    communication_lat: [NPROC][NPROC]f32,
 };
 pub const Task = struct {
     id: usize,
@@ -83,6 +84,7 @@ pub fn DAG(comptime NodeData: type, comptime EdgeData: type) type {
 
 pub const TaskDAG = DAG(Task, TaskCommunication);
 
+/// OFT/OCT function in the literature
 pub fn optimisticFinishTime(n: *TaskDAG.Node, platform: Platform, p: Processor) f32 {
     if (n.data.per_proc[p.pid].optimistic_finish_time) |oft| return oft;
     if (n.dependants.items.len == 0) return n.data.per_proc[p.pid].wcet;
@@ -95,7 +97,8 @@ pub fn optimisticFinishTime(n: *TaskDAG.Node, platform: Platform, p: Processor) 
             rs = @min(
                 rs,
                 optimisticFinishTime(nn, platform, np) +
-                    e.data_transfer / platform.communication_bw[p.pid][np.pid],
+                    e.data_transfer / platform.communication_bw[p.pid][np.pid] +
+                    platform.communication_lat[p.pid][np.pid],
             );
         }
         res = @max(res, rs);
@@ -105,6 +108,15 @@ pub fn optimisticFinishTime(n: *TaskDAG.Node, platform: Platform, p: Processor) 
     return n.data.per_proc[p.pid].optimistic_finish_time.?;
 }
 
+/// rank_OFT/OCT
+pub fn taskRankOptimisticFinishTime(n: *TaskDAG.Node, platform: Platform) f32 {
+    var res: f32 = 0;
+    for (platform.processors) |p| {
+        res += optimisticFinishTime(n, platform, p);
+    }
+    return res / Platform.NPROC;
+}
+
 pub fn effectiveStartTime(n: *const TaskDAG.Node, platform: Platform, p: Processor) f32 { // OK
     var dep: f32 = 0;
     for (n.dependencies.items) |it| {
@@ -112,7 +124,8 @@ pub fn effectiveStartTime(n: *const TaskDAG.Node, platform: Platform, p: Process
         if (pn.data.actual_finish_time) |aft| {
             dep = @max(
                 dep,
-                aft + e.data_transfer / platform.communication_bw[pn.data.allocated_pid.?][p.pid],
+                aft + e.data_transfer / platform.communication_bw[pn.data.allocated_pid.?][p.pid] +
+                    platform.communication_lat[pn.data.allocated_pid.?][p.pid],
             );
         } else return std.math.inf(f32);
     }
@@ -497,6 +510,10 @@ const testing = struct {
         .{ MAX_BW, 2, 2 },
         .{ 2, MAX_BW, 2 },
         .{ 2, 2, MAX_BW },
+    }, .communication_lat = .{
+        .{ 0, 0, 0 },
+        .{ 0, 0, 0 },
+        .{ 0, 0, 0 },
     } };
 
     test "cooling/heating temp/time" { // OK
