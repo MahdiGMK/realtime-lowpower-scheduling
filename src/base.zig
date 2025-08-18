@@ -49,6 +49,21 @@ pub const TaskCommunication = struct {
     data_transfer: f32,
 };
 
+pub fn avgWCET(task: Task) f32 {
+    var sum: f32 = 0;
+    for (task.per_proc) |p| sum += p.wcet;
+    return sum / task.per_proc.len;
+}
+pub fn avgCommunicationLat(platform: Platform, pid: u8) f32 {
+    var sum: f32 = 0;
+    for (platform.communication_lat[pid]) |lat| sum += lat;
+    return sum / Platform.NPROC;
+}
+pub fn avgCommunicationBW(platform: Platform, pid: u8) f32 {
+    var sum: f32 = 0;
+    for (platform.communication_bw[pid]) |bw| sum += bw;
+    return sum / Platform.NPROC;
+}
 pub fn makeTaskList(dag: *TaskDAG) !ArrayList(*TaskDAG.Node) {
     var task_list = ArrayList(*TaskDAG.Node).empty;
     for (dag.nodes.items) |*nd|
