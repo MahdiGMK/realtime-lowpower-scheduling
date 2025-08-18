@@ -130,6 +130,19 @@ pub fn DAG(comptime NodeData: type, comptime EdgeData: type) type {
 
 pub const TaskDAG = DAG(Task, TaskCommunication);
 
+pub fn resetSchedule(dag: *TaskDAG, platform: *Platform) !void {
+    for (dag.nodes.items) |*nd| {
+        nd.data.actual_finish_time = null;
+        nd.data.actual_start_time = null;
+        nd.data.allocated_pid = null;
+        for (0..Platform.NPROC) |pid| nd.data.per_proc[pid].optimistic_finish_time = null;
+    }
+    for (platform.processors) |*proc| {
+        proc.avail = 0;
+        proc.temp_cur = TEMP_AMBIANT;
+    }
+}
+
 /// OFT/OCT function in the literature
 pub fn optimisticFinishTime(n: *TaskDAG.Node, platform: Platform, p: Processor) f32 {
     if (n.data.per_proc[p.pid].optimistic_finish_time) |oft| return oft;

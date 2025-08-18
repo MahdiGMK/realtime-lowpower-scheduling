@@ -7,8 +7,8 @@ const ArrayList = @import("std").ArrayListUnmanaged;
 const global = base.global;
 
 var rank_mem: std.AutoHashMap(*const TaskDAG.Node, f32) = undefined;
-var total_avg_lat = undefined;
-var total_avg_bw = undefined;
+var total_avg_lat: f32 = undefined;
+var total_avg_bw: f32 = undefined;
 fn taskRank(task: *const TaskDAG.Node, platform: Platform) f32 {
     if (rank_mem.get(task)) |rnk| return rnk;
     var mx: f32 = 0;
@@ -21,7 +21,7 @@ fn taskRank(task: *const TaskDAG.Node, platform: Platform) f32 {
         );
     }
     const res = base.avgWCET(task.data) + mx;
-    rank_mem.put(task, res);
+    rank_mem.put(task, res) catch {};
     return res;
 }
 
@@ -30,8 +30,8 @@ pub fn schedule(dag: *TaskDAG, platform: *Platform) !void {
     total_avg_bw = 0;
     total_avg_lat = 0;
     for (0..Platform.NPROC) |pid| {
-        total_avg_bw += base.avgCommunicationBW(platform, pid);
-        total_avg_lat += base.avgCommunicationLat(platform, pid);
+        total_avg_bw += base.avgCommunicationBW(platform.*, @truncate(pid));
+        total_avg_lat += base.avgCommunicationLat(platform.*, @truncate(pid));
     }
     total_avg_bw /= Platform.NPROC;
     total_avg_lat /= Platform.NPROC;
@@ -40,7 +40,7 @@ pub fn schedule(dag: *TaskDAG, platform: *Platform) !void {
 
     var task_list = try base.makeTaskList(dag);
     while (task_list.items.len > 0) {
-        const task = base.extractBestTask(&task_list, platform, taskRank);
+        const task = base.extractBestTask(&task_list, platform.*, taskRank);
 
         std.log.info("selected task : {}\n", .{task.data.id});
         var opteft = std.math.inf(f32);
@@ -49,7 +49,7 @@ pub fn schedule(dag: *TaskDAG, platform: *Platform) !void {
         for (platform.processors) |proc| {
             std.log.info("--checking proc{}\n", .{proc.pid});
             // eq 5
-            const est = base.effectiveStartTime(task, platform, proc);
+            const est = base.effectiveStartTime(task, platform.*, proc);
             // eq 6
             const eft = est + task.data.per_proc[proc.pid].wcet;
             std.log.info("  --EST : {}\n", .{est});

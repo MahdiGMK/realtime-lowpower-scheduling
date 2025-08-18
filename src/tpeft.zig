@@ -21,7 +21,7 @@ const effectiveStartTime = base.effectiveStartTime;
 // }
 
 /// O_EFT - eq 9
-fn optimisticEFT(node: *const TaskDAG.Node, platform: Platform, proc: Processor) f32 {
+fn optimisticEFT(node: *TaskDAG.Node, platform: Platform, proc: Processor) f32 {
     return effectiveStartTime(node, platform, proc) +
         optimisticFinishTime(node, platform, proc);
 }
@@ -34,8 +34,8 @@ pub fn schedule(dag: *TaskDAG, platform: *Platform) !void {
 
         std.log.info("selected task : {}\n", .{task.data.id});
         var optproc: u8 = undefined;
-        var optest: u8 = undefined;
-        var optoeft: u8 = std.math.inf(f32);
+        var optest: f32 = undefined;
+        var optoeft = std.math.inf(f32);
 
         for (platform.processors) |proc| {
             std.log.info("--checking proc{}\n", .{proc.pid});

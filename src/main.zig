@@ -56,8 +56,7 @@ const testing = struct {
         .{ 0, 0, 0 },
     } };
 
-    test "tmds" {
-        var platform = testing_platform;
+    fn makeTestDag() !TaskDAG {
         var dag = TaskDAG.init();
         try dag.appendNode(update(testing_tasks[0], .{ .id = 0 }));
         try dag.appendNode(update(testing_tasks[1], .{ .id = 1 }));
@@ -68,8 +67,69 @@ const testing = struct {
         try dag.connectNodes(0, 1, .{ .data_transfer = 100 });
         try dag.connectNodes(0, 2, .{ .data_transfer = 100 });
         try dag.connectNodes(1, 2, .{ .data_transfer = 1 });
+        return dag;
+    }
+
+    test "tmds" {
+        var platform = testing_platform;
+
+        var dag = try makeTestDag();
 
         try @import("tmds.zig").schedule(&dag, &platform);
+
+        for (dag.nodes.items, 0..) |node, id| {
+            std.debug.print("{} == {}-{} on {}\n", .{
+                id,
+                node.data.actual_start_time.?,
+                node.data.actual_finish_time.?,
+                node.data.allocated_pid.?,
+            });
+        }
+        _ = 0;
+        try base.visualizeSchedule(dag, platform);
+    }
+
+    test "theft" {
+        var platform = testing_platform;
+        var dag = try makeTestDag();
+
+        try @import("theft.zig").schedule(&dag, &platform);
+
+        for (dag.nodes.items, 0..) |node, id| {
+            std.debug.print("{} == {}-{} on {}\n", .{
+                id,
+                node.data.actual_start_time.?,
+                node.data.actual_finish_time.?,
+                node.data.allocated_pid.?,
+            });
+        }
+        _ = 0;
+        try base.visualizeSchedule(dag, platform);
+    }
+
+    test "tpeft" {
+        var platform = testing_platform;
+        var dag = try makeTestDag();
+
+        try @import("tpeft.zig").schedule(&dag, &platform);
+
+        for (dag.nodes.items, 0..) |node, id| {
+            std.debug.print("{} == {}-{} on {}\n", .{
+                id,
+                node.data.actual_start_time.?,
+                node.data.actual_finish_time.?,
+                node.data.allocated_pid.?,
+            });
+        }
+        _ = 0;
+        try base.visualizeSchedule(dag, platform);
+    }
+
+    test "tppts" {
+        var platform = testing_platform;
+        var dag = try makeTestDag();
+
+        try @import("tppts.zig").schedule(&dag, &platform);
 
         for (dag.nodes.items, 0..) |node, id| {
             std.debug.print("{} == {}-{} on {}\n", .{

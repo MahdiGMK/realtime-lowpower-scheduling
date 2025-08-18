@@ -55,8 +55,8 @@ pub fn schedule(dag: *TaskDAG, platform: *Platform) !void {
 
         std.log.info("selected task : {}\n", .{task.data.id});
         var optproc: u8 = undefined;
-        var optest: u8 = undefined;
-        var optlaeft: u8 = std.math.inf(f32);
+        var optest: f32 = undefined;
+        var optlaeft = std.math.inf(f32);
 
         for (platform.processors) |proc| {
             std.log.info("--checking proc{}\n", .{proc.pid});
