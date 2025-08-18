@@ -49,6 +49,28 @@ pub const TaskCommunication = struct {
     data_transfer: f32,
 };
 
+pub fn makeTaskList(dag: *TaskDAG) !ArrayList(*TaskDAG.Node) {
+    var task_list = ArrayList(*TaskDAG.Node).empty;
+    for (dag.nodes.items) |*nd|
+        if (nd.dependencies.items.len == 0)
+            try task_list.append(global.alloc, nd);
+    return task_list;
+}
+pub fn extractBestTask(task_list: *ArrayList(*TaskDAG.Node), platform: Platform, rank_fn: fn (*TaskDAG.Node, Platform) f32) *TaskDAG.Node {
+    var tsk: *TaskDAG.Node = undefined;
+    var idx: usize = undefined;
+    var rnk: f32 = 0;
+    for (task_list.items, 0..) |t, i| {
+        const r = rank_fn(t, platform);
+        if (rnk <= r) {
+            rnk = r;
+            idx = i;
+            tsk = t;
+        }
+    }
+    _ = task_list.swapRemove(idx);
+    return tsk;
+}
 pub fn DAG(comptime NodeData: type, comptime EdgeData: type) type {
     return struct {
         const Graph = @This();
@@ -64,6 +86,15 @@ pub fn DAG(comptime NodeData: type, comptime EdgeData: type) type {
                     .dependencies = .empty,
                     .dependants = .empty,
                 };
+            }
+            pub fn markAsSolved(self: Node, completed_deps: *ArrayList(*Node)) !void {
+                for (self.dependants.items) |it| {
+                    const nd, _ = it;
+                    nd.solved_deps += 1;
+                    if (nd.solved_deps == nd.dependencies.items.len) {
+                        try completed_deps.append(global.alloc, nd);
+                    }
+                }
             }
         };
         nodes: ArrayList(Node),

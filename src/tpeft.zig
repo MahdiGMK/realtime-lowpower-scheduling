@@ -27,28 +27,11 @@ fn optimisticEFT(node: *const TaskDAG.Node, platform: Platform, proc: Processor)
 }
 
 pub fn schedule(dag: *TaskDAG, platform: *Platform) !void {
-    var task_list = ArrayList(*TaskDAG.Node).empty;
-    for (dag.nodes.items) |*nd|
-        if (nd.dependencies.items.len == 0)
-            try task_list.append(global.alloc, nd);
-    // task_list == sources(graph)
+    var task_list = try base.makeTaskList(dag);
 
     while (task_list.items.len > 0) {
-        const task = extract_best_task: {
-            var tsk: *TaskDAG.Node = undefined;
-            var idx: usize = undefined;
-            var rnk: f32 = 0;
-            for (task_list.items, 0..) |t, i| {
-                const r = taskRank(t, platform.*);
-                if (rnk <= r) {
-                    rnk = r;
-                    idx = i;
-                    tsk = t;
-                }
-            }
-            _ = task_list.swapRemove(idx);
-            break :extract_best_task tsk;
-        };
+        const task = base.extractBestTask(&task_list, platform.*, taskRank);
+
         std.log.info("selected task : {}\n", .{task.data.id});
         var optproc: u8 = undefined;
         var optest: u8 = undefined;
@@ -74,12 +57,6 @@ pub fn schedule(dag: *TaskDAG, platform: *Platform) !void {
         proc.temp_cur = thermal_est.fin_temp;
         proc.avail = thermal_est.fin_t;
 
-        for (task.dependants.items) |it| {
-            const nd, _ = it;
-            nd.solved_deps += 1;
-            if (nd.solved_deps == nd.dependencies.items.len) {
-                try task_list.append(global.alloc, nd);
-            }
-        }
+        try task.markAsSolved(&task_list);
     }
 }
