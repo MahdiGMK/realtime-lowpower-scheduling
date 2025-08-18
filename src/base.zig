@@ -56,7 +56,7 @@ pub fn makeTaskList(dag: *TaskDAG) !ArrayList(*TaskDAG.Node) {
             try task_list.append(global.alloc, nd);
     return task_list;
 }
-pub fn extractBestTask(task_list: *ArrayList(*TaskDAG.Node), platform: Platform, rank_fn: fn (*TaskDAG.Node, Platform) f32) *TaskDAG.Node {
+pub fn extractBestTask(task_list: *ArrayList(*TaskDAG.Node), platform: Platform, comptime rank_fn: fn (*TaskDAG.Node, Platform) f32) *TaskDAG.Node {
     var tsk: *TaskDAG.Node = undefined;
     var idx: usize = undefined;
     var rnk: f32 = 0;
