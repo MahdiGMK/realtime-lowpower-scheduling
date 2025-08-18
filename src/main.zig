@@ -50,6 +50,10 @@ const testing = struct {
         .{ MAX_BW, 2, 2 },
         .{ 2, MAX_BW, 2 },
         .{ 2, 2, MAX_BW },
+    }, .communication_lat = .{
+        .{ 0, 0, 0 },
+        .{ 0, 0, 0 },
+        .{ 0, 0, 0 },
     } };
 
     test "tmds" {
@@ -65,7 +69,7 @@ const testing = struct {
         try dag.connectNodes(0, 2, .{ .data_transfer = 100 });
         try dag.connectNodes(1, 2, .{ .data_transfer = 1 });
 
-        try @import("tmds.zig").tmds(&dag, &platform);
+        try @import("tmds.zig").schedule(&dag, &platform);
 
         for (dag.nodes.items, 0..) |node, id| {
             std.debug.print("{} == {}-{} on {}\n", .{
