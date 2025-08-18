@@ -5,14 +5,8 @@ const Platform = base.Platform;
 const ArrayList = @import("std").ArrayListUnmanaged;
 const global = base.global;
 
-fn taskRank(n: *TaskDAG.Node, platform: Platform) f32 {
-    var res: f32 = 0;
-    for (platform.processors) |p| {
-        res += base.optimisticFinishTime(n, platform, p);
-    }
-    return res / Platform.NPROC;
-}
-pub fn tmds(dag: *TaskDAG, platform: *Platform) !void {
+const taskRank = base.taskRankOptimisticFinishTime;
+pub fn schedule(dag: *TaskDAG, platform: *Platform) !void {
     var task_list = ArrayList(*TaskDAG.Node).empty;
     for (dag.nodes.items) |*nd|
         if (nd.dependencies.items.len == 0)
