@@ -6,52 +6,54 @@ const Processor = base.Processor;
 const ArrayList = @import("std").ArrayListUnmanaged;
 const global = base.global;
 
-var rank_mem: std.AutoHashMap(*const TaskDAG.Node, f32) = undefined;
-var total_avg_lat: f32 = undefined;
-var total_avg_bw: f32 = undefined;
-fn taskRank(task: *const TaskDAG.Node, platform: Platform) f32 {
-    if (rank_mem.get(task)) |rnk| return rnk;
+var makespan1: f32 = 0;
+var avglat: f32 = 0;
+var avgbw: f32 = 0;
+var dlt_buf: std.AutoHashMap(*TaskDAG.Node, f32) = undefined;
+fn DLT(task: *TaskDAG.Node) f32 {
     var mx: f32 = 0;
-    for (task.dependants.items) |dep| {
-        const nd, const com = dep;
-        mx = @max(
-            mx,
-            com.data_transfer / total_avg_bw + total_avg_lat +
-                taskRank(nd, platform),
-        );
+    for (task.dependants.items) |nd| {
+        const avgcom = avglat + nd.@"1".data_transfer / avgbw;
+        mx = @max(mx, nd.@"0".data.actual_start_time.? - avgcom);
     }
-    const res = base.avgWCET(task.data) + mx;
-    rank_mem.put(task, res) catch {};
-    return res;
+    return makespan1 - mx;
+}
+fn taskRank(task: *TaskDAG.Node, platform: Platform) f32 {
+    _ = platform;
+    return dlt_buf.get(task).?;
 }
 
 pub fn schedule(dag: *TaskDAG, platform: *Platform) !void {
-    // initial
-    total_avg_bw = base.avgCommunicationBW(platform.*);
-    total_avg_lat = base.avgCommunicationLat(platform.*);
-    rank_mem = .init(global.alloc);
-    defer rank_mem.deinit();
+    avgbw = base.avgCommunicationBW(platform.*);
+    avglat = base.avgCommunicationLat(platform.*);
+
+    try @import("tpeft.zig").schedule(dag, platform);
+    makespan1 = 0;
+    for (dag.nodes.items) |nd| makespan1 = @max(makespan1, nd.data.actual_finish_time.?);
+
+    dlt_buf = .init(global.alloc);
+    defer dlt_buf.deinit();
+    for (dag.nodes.items) |*nd| try dlt_buf.put(nd, DLT(nd));
+    // some extraction logic
+    //
+    base.resetSchedule(dag, platform);
 
     var task_list = try base.makeTaskList(dag);
     while (task_list.items.len > 0) {
         const task = base.extractBestTask(&task_list, platform.*, taskRank);
-
-        std.log.info("selected task : {}\n", .{task.data.id});
-        var opteft = std.math.inf(f32);
         var optproc: u8 = undefined;
         var optest: f32 = undefined;
+        var optfunc = std.math.inf(f32);
+
         for (platform.processors) |proc| {
             std.log.info("--checking proc{}\n", .{proc.pid});
-            // eq 5
             const est = base.effectiveStartTime(task, platform.*, proc);
-            // eq 6
-            const eft = est + task.data.per_proc[proc.pid].wcet;
-            std.log.info("  --EST : {}\n", .{est});
-            std.log.info("  --EFT : {}\n", .{eft});
-            if (eft <= opteft) {
-                opteft = eft;
+            const opt = est + dlt_buf.get(task).?;
+            std.log.info("  --OPT : {}\n", .{opt});
+            if (opt <= optfunc) {
                 optproc = proc.pid;
                 optest = est;
+                optfunc = opt;
             }
         }
 
