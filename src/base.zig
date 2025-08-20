@@ -144,7 +144,37 @@ pub fn DAG(comptime NodeData: type, comptime EdgeData: type) type {
                 g.appendNode(undefined);
                 g.connectNodes(first_in_row, root, undefined);
             }
+            return g;
         }
+        pub fn initLaplace(n: usize) Graph {
+            var g = Graph{
+                .nodes = .initCapacity(global.alloc, n * n),
+            };
+            g.appendNode(undefined);
+            var root: usize = 0;
+            for (2..n + 1) |width| {
+                const first = g.nodes.items.len;
+                for (0..width) |off| {
+                    g.appendNode(undefined);
+                    if (root + off < first) g.connectNodes(root + off, first + off, undefined);
+                    if (off > 0) g.connectNodes(root + off - 1, first + off, undefined);
+                }
+                root = first;
+            }
+            for (1..n) |s| {
+                const width = n - s;
+                const first = g.nodes.items.len;
+                for (0..width) |off| {
+                    g.appendNode(undefined);
+                    g.connectNodes(root + off, first + off, undefined);
+                    if (root + off + 1 < first)
+                        g.connectNodes(root + off + 1, first + off, undefined);
+                }
+                root = first;
+            }
+            return g;
+        }
+
         pub fn appendNode(self: *Graph, data: NodeData) !void {
             try self.nodes.append(global.alloc, Node.init(data));
         }
