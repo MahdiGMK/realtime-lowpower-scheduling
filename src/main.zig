@@ -160,6 +160,24 @@ const testing = struct {
         _ = 0;
         try base.visualizeSchedule(dag, platform);
     }
+
+    test "tods" {
+        var platform = testing_platform;
+        var dag = try makeTestDag();
+
+        try @import("tods.zig").schedule(&dag, &platform);
+
+        for (dag.nodes.items, 0..) |node, id| {
+            std.debug.print("{} == {}-{} on {}\n", .{
+                id,
+                node.data.actual_start_time.?,
+                node.data.actual_finish_time.?,
+                node.data.allocated_pid.?,
+            });
+        }
+        _ = 0;
+        try base.visualizeSchedule(dag, platform);
+    }
 };
 
 test {
