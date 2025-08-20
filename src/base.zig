@@ -120,6 +120,31 @@ pub fn DAG(comptime NodeData: type, comptime EdgeData: type) type {
         pub fn init() Graph {
             return Graph{ .nodes = .empty };
         }
+        pub fn initGaussianElimination(n: usize) Graph {
+            var g = Graph{
+                .nodes = .initCapacity(global.alloc, (n - 1) * (n + 2) / 2),
+            };
+            g.appendNode(undefined);
+            var root: usize = 0;
+            var first_in_prv_row: ?usize = null;
+            for (1..n) |s| {
+                const width = n - s;
+                const first_in_row = g.nodes.items.len;
+                for (0..width) |off| {
+                    g.appendNode(undefined);
+                    g.connectNodes(root, g.nodes.items.len - 1, undefined);
+                    if (first_in_prv_row) |first_upper| {
+                        g.connectNodes(first_upper + off + 1, g.nodes.items.len - 1, undefined);
+                    }
+                }
+                first_in_prv_row = first_in_row;
+                if (width == 1) break;
+
+                root = g.nodes.items.len;
+                g.appendNode(undefined);
+                g.connectNodes(first_in_row, root, undefined);
+            }
+        }
         pub fn appendNode(self: *Graph, data: NodeData) !void {
             try self.nodes.append(global.alloc, Node.init(data));
         }
