@@ -178,10 +178,123 @@ const testing = struct {
         _ = 0;
         try base.visualizeSchedule(dag, platform);
     }
+
+    test "gaussian-comparison" {}
 };
 
 test {
     _ = base;
-    _ = @import("tmds.zig");
     _ = testing;
+}
+
+pub fn main() !void {
+    var prng = std.Random.DefaultPrng.init(0);
+    const rnd = prng.random();
+
+    const graph_layouts = .{
+        TaskDAG.initGaussianElimination,
+        TaskDAG.initLaplace,
+    };
+    const graph_layout_names = .{
+        "GaussianElimination",
+        "Laplace",
+    };
+    const sched_names = [_][]const u8{
+        "tmds.zig",
+        "theft.zig",
+        "tods.zig",
+        "tpeft.zig",
+        "tppts.zig",
+        "tpsls.zig",
+    };
+    const schedules = .{
+        @import("tmds.zig").schedule,
+        @import("theft.zig").schedule,
+        @import("tods.zig").schedule,
+        @import("tpeft.zig").schedule,
+        @import("tppts.zig").schedule,
+        @import("tpsls.zig").schedule,
+    };
+
+    var resultss: [2][100][sched_names.len]f32 = undefined;
+    inline for (graph_layouts, &resultss) |initLayout, *results| {
+        for (0..100) |i| {
+            var task_dag = try initLayout(rnd.intRangeAtMost(u8, 3, 10));
+            for (task_dag.nodes.items, 0..) |*nd, id| {
+                nd.data = Task{
+                    .id = id,
+                    .per_proc = .{
+                        .{
+                            .wcet = rnd.float(f32) * 1000 + 500,
+                            .steady_state_temp = rnd.float(f32) * 50 + 50,
+                        },
+                        .{
+                            .wcet = rnd.float(f32) * 1000 + 500,
+                            .steady_state_temp = rnd.float(f32) * 50 + 50,
+                        },
+                        .{
+                            .wcet = rnd.float(f32) * 1000 + 500,
+                            .steady_state_temp = rnd.float(f32) * 50 + 50,
+                        },
+                    },
+                };
+                for (nd.dependencies.items) |*ed|
+                    ed.@"1" = base.TaskCommunication{ .data_transfer = rnd.float(f32) };
+                for (nd.dependants.items) |*ed|
+                    ed.@"1" = base.TaskCommunication{ .data_transfer = rnd.float(f32) };
+            }
+            var platform = Platform{
+                .processors = .{
+                    Processor{
+                        .pid = 0,
+                        .temp_limit = rnd.float(f32) * 30 + 50,
+                        .thermo = .init(2.332, 13.1568, 0.1754, 0.68, 380, 2.6),
+                    },
+                    Processor{
+                        .pid = 0,
+                        .temp_limit = rnd.float(f32) * 30 + 50,
+                        .thermo = .init(2.332, 13.1568, 0.1754, 0.68, 380, 2.6),
+                    },
+                    Processor{
+                        .pid = 0,
+                        .temp_limit = rnd.float(f32) * 30 + 50,
+                        .thermo = .init(2.332, 13.1568, 0.1754, 0.68, 380, 2.6),
+                    },
+                },
+                .communication_bw = .{
+                    .{ MAX_BW, rnd.float(f32) + 2, rnd.float(f32) + 2 },
+                    .{ rnd.float(f32) + 2, MAX_BW, rnd.float(f32) + 2 },
+                    .{ rnd.float(f32) + 2, rnd.float(f32) + 2, MAX_BW },
+                },
+                .communication_lat = .{
+                    .{ 0, rnd.float(f32), rnd.float(f32) },
+                    .{ rnd.float(f32), 0, rnd.float(f32) },
+                    .{ rnd.float(f32), rnd.float(f32), 0 },
+                },
+            };
+
+            inline for (sched_names, schedules, 0..) |name, sched, ind| {
+                std.debug.print("---sched--- : {} {s}\n", .{ i, name });
+                base.resetSchedule(&task_dag, &platform);
+                try sched(&task_dag, &platform);
+                var makespan: f32 = 0;
+                for (task_dag.nodes.items) |nd| makespan = @max(makespan, nd.data.actual_finish_time.?);
+                results[i][ind] = makespan;
+            }
+        }
+    }
+
+    inline for (resultss, graph_layout_names) |results, layname| {
+        std.debug.print("\n--- --- --- --- --- --- --- --- {s} RESULTS --- --- --- --- --- --- --- ---\n", .{layname});
+        for (sched_names) |name| {
+            std.debug.print("{s}\t", .{name});
+        }
+        std.debug.print("\n", .{});
+        for (results) |row| {
+            for (row) |val| {
+                std.debug.print("{:0.4}\t", .{val});
+            }
+            std.debug.print("\n", .{});
+        }
+    }
 }

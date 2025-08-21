@@ -41,7 +41,7 @@ pub fn build(b: *std.Build) void {
 
     exe_unit_tests.root_module.addCSourceFile(.{ .file = nanovg_dep.path("lib/gl2/src/glad.c"), .flags = &.{} });
     exe_unit_tests.root_module.addIncludePath(nanovg_dep.path("lib/gl2/include"));
-    exe_unit_tests.root_module.linkSystemLibrary("glfw");
+    exe_unit_tests.root_module.linkSystemLibrary("glfw", .{ .needed = true });
     // exe_unit_tests.root_module.linkSystemLibrary("GL"); // maybe?
     // exe_unit_tests.root_module.linkSystemLibrary("X11");// idk!
     const run_exe_unit_tests = b.addRunArtifact(exe_unit_tests);

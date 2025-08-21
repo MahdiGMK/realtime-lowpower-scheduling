@@ -29,7 +29,7 @@ fn urv(task: *const TaskDAG.Node) !f32 {
 }
 fn taskRank(task: *const TaskDAG.Node, platform: Platform) f32 {
     _ = platform; // autofix
-    return 1 / (urv(task) catch @panic("OOM"));
+    return (urv(task) catch @panic("OOM"));
 }
 fn energyConsumptionEst(task: Task, proc: Processor) f32 {
     return task.per_proc[proc.pid].wcet * task.per_proc[proc.pid].steady_state_temp;

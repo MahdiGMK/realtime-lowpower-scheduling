@@ -9,7 +9,7 @@ pub const global = struct {
 pub const Processor = struct {
     pid: u8,
     temp_limit: f32,
-    power_mode_switching_time: f32 = 0.0_1 * 80, // 80us according to the paper
+    power_mode_switching_time: f32 = 0.000_001 * 80, // 80us according to the paper
     avail: f32 = 0,
     temp_cur: f32 = TEMP_AMBIANT,
     thermo: struct {
@@ -78,7 +78,7 @@ pub fn makeTaskList(dag: *TaskDAG) !ArrayList(*TaskDAG.Node) {
 pub fn extractBestTask(task_list: *ArrayList(*TaskDAG.Node), platform: Platform, comptime rank_fn: fn (*TaskDAG.Node, Platform) f32) *TaskDAG.Node {
     var tsk: *TaskDAG.Node = undefined;
     var idx: usize = undefined;
-    var rnk: f32 = 0;
+    var rnk: f32 = -std.math.inf(f32);
     for (task_list.items, 0..) |t, i| {
         const r = rank_fn(t, platform);
         if (rnk <= r) {
@@ -120,44 +120,44 @@ pub fn DAG(comptime NodeData: type, comptime EdgeData: type) type {
         pub fn init() Graph {
             return Graph{ .nodes = .empty };
         }
-        pub fn initGaussianElimination(n: usize) Graph {
+        pub fn initGaussianElimination(n: usize) !Graph {
             var g = Graph{
-                .nodes = .initCapacity(global.alloc, (n - 1) * (n + 2) / 2),
+                .nodes = try .initCapacity(global.alloc, (n - 1) * (n + 2) / 2),
             };
-            g.appendNode(undefined);
+            try g.appendNode(undefined);
             var root: usize = 0;
             var first_in_prv_row: ?usize = null;
             for (1..n) |s| {
                 const width = n - s;
                 const first_in_row = g.nodes.items.len;
                 for (0..width) |off| {
-                    g.appendNode(undefined);
-                    g.connectNodes(root, g.nodes.items.len - 1, undefined);
+                    try g.appendNode(undefined);
+                    try g.connectNodes(root, g.nodes.items.len - 1, undefined);
                     if (first_in_prv_row) |first_upper| {
-                        g.connectNodes(first_upper + off + 1, g.nodes.items.len - 1, undefined);
+                        try g.connectNodes(first_upper + off + 1, g.nodes.items.len - 1, undefined);
                     }
                 }
                 first_in_prv_row = first_in_row;
                 if (width == 1) break;
 
                 root = g.nodes.items.len;
-                g.appendNode(undefined);
-                g.connectNodes(first_in_row, root, undefined);
+                try g.appendNode(undefined);
+                try g.connectNodes(first_in_row, root, undefined);
             }
             return g;
         }
-        pub fn initLaplace(n: usize) Graph {
+        pub fn initLaplace(n: usize) !Graph {
             var g = Graph{
-                .nodes = .initCapacity(global.alloc, n * n),
+                .nodes = try .initCapacity(global.alloc, n * n),
             };
-            g.appendNode(undefined);
+            try g.appendNode(undefined);
             var root: usize = 0;
             for (2..n + 1) |width| {
                 const first = g.nodes.items.len;
                 for (0..width) |off| {
-                    g.appendNode(undefined);
-                    if (root + off < first) g.connectNodes(root + off, first + off, undefined);
-                    if (off > 0) g.connectNodes(root + off - 1, first + off, undefined);
+                    try g.appendNode(undefined);
+                    if (root + off < first) try g.connectNodes(root + off, first + off, undefined);
+                    if (off > 0) try g.connectNodes(root + off - 1, first + off, undefined);
                 }
                 root = first;
             }
@@ -165,10 +165,10 @@ pub fn DAG(comptime NodeData: type, comptime EdgeData: type) type {
                 const width = n - s;
                 const first = g.nodes.items.len;
                 for (0..width) |off| {
-                    g.appendNode(undefined);
-                    g.connectNodes(root + off, first + off, undefined);
+                    try g.appendNode(undefined);
+                    try g.connectNodes(root + off, first + off, undefined);
                     if (root + off + 1 < first)
-                        g.connectNodes(root + off + 1, first + off, undefined);
+                        try g.connectNodes(root + off + 1, first + off, undefined);
                 }
                 root = first;
             }
@@ -351,6 +351,9 @@ pub fn tett(t: Task, p: Processor, cur_time: f32, temp_ini: f32) struct { fin_t:
     var cur_t = cur_time + allowed_exec_time;
     const idle_t = coolingTime(p, optimalCooldown(t, p), p.temp_limit);
     allowed_exec_time = maximumDurationOfContExecution(t, p, optimalCooldown(t, p));
+
+    std.debug.print("optcool : {}\n", .{optimalCooldown(t, p)});
+    std.debug.print("lim : {}\n", .{p.temp_limit});
 
     while (rem_exec_time > 0) {
         if (rem_exec_time >= allowed_exec_time) {
@@ -804,3 +807,7 @@ const testing = struct {
         );
     }
 };
+
+test {
+    _ = testing;
+}
