@@ -253,12 +253,12 @@ pub fn main() !void {
                     Processor{
                         .pid = 0,
                         .temp_limit = rnd.float(f32) * 30 + 50,
-                        .thermo = .init(2.332, 13.1568, 0.1754, 0.68, 380, 2.6),
+                        .thermo = .init(2.138, 5.0187, 0.1942, 0.487, 295, 3.4),
                     },
                     Processor{
                         .pid = 0,
                         .temp_limit = rnd.float(f32) * 30 + 50,
-                        .thermo = .init(2.332, 13.1568, 0.1754, 0.68, 380, 2.6),
+                        .thermo = .init(4.556, 15.6262, 0.1942, 0.238, 320, 3.0),
                     },
                 },
                 .communication_bw = .{
@@ -310,20 +310,19 @@ pub fn main() !void {
                     }
                 }
             }
-
-            std.debug.print("\n--- --- --- --- --- --- --- --- {s} - WINS/TIES/LOSSES  --- --- --- --- --- --- --- ---\n", .{layname});
-            std.debug.print("\t", .{});
-            for (sched_names) |name| {
-                std.debug.print("\t{s}", .{name});
+        }
+        std.debug.print("\n--- --- --- --- --- --- --- --- {s} - WINS/TIES/LOSSES  --- --- --- --- --- --- --- ---\n", .{layname});
+        std.debug.print("\t", .{});
+        for (sched_names) |name| {
+            std.debug.print("\t{s}", .{name});
+        }
+        std.debug.print("\n", .{});
+        for (wins, ties, loss, sched_names) |ws, ts, ls, name| {
+            std.debug.print("{s}\t", .{name});
+            for (ws, ts, ls) |w, t, l| {
+                std.debug.print(" {}/{}/{} \t", .{ w, t, l });
             }
             std.debug.print("\n", .{});
-            for (wins, ties, loss, sched_names) |ws, ts, ls, name| {
-                std.debug.print("{s}\t", .{name});
-                for (ws, ts, ls) |w, t, l| {
-                    std.debug.print(" {}/{}/{} \t", .{ w, t, l });
-                }
-                std.debug.print("\n", .{});
-            }
         }
     }
 }
