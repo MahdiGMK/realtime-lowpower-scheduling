@@ -286,6 +286,9 @@ pub fn main() !void {
 
     inline for (resultss, graph_layout_names) |results, layname| {
         std.debug.print("\n--- --- --- --- --- --- --- --- {s} RESULTS --- --- --- --- --- --- --- ---\n", .{layname});
+        var wins: [6][6]usize = @splat(@splat(0));
+        var ties: [6][6]usize = @splat(@splat(0));
+        var loss: [6][6]usize = @splat(@splat(0));
         for (sched_names) |name| {
             std.debug.print("{s}\t", .{name});
         }
@@ -295,6 +298,32 @@ pub fn main() !void {
                 std.debug.print("{:0.4}\t", .{val});
             }
             std.debug.print("\n", .{});
+
+            for (&wins, &ties, &loss, row) |*ws, *ts, *ls, r0| {
+                for (ws, ts, ls, row) |*w, *t, *l, r1| {
+                    if (r0 < r1 - 0.001) {
+                        w.* += 1;
+                    } else if (r0 > r1 + 0.001) {
+                        l.* += 1;
+                    } else {
+                        t.* += 1;
+                    }
+                }
+            }
+
+            std.debug.print("\n--- --- --- --- --- --- --- --- {s} - WINS/TIES/LOSSES  --- --- --- --- --- --- --- ---\n", .{layname});
+            std.debug.print("\t", .{});
+            for (sched_names) |name| {
+                std.debug.print("\t{s}", .{name});
+            }
+            std.debug.print("\n", .{});
+            for (wins, ties, loss, sched_names) |ws, ts, ls, name| {
+                std.debug.print("{s}\t", .{name});
+                for (ws, ts, ls) |w, t, l| {
+                    std.debug.print(" {}/{}/{} \t", .{ w, t, l });
+                }
+                std.debug.print("\n", .{});
+            }
         }
     }
 }

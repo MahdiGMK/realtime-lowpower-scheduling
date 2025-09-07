@@ -725,7 +725,7 @@ const testing = struct {
                 plotting.Aes{ .line_width = 3, .line_col = plotting.Color.blue },
             },
             .{ temp_from - 5, temp_to + 5 },
-            .{ -1, 5 },
+            .{ -1, 80 },
         );
     }
     test "maxTempAllowedContExec" { // OK
@@ -803,7 +803,7 @@ const testing = struct {
                 // plotting.Aes{ .line_width = 3, .line_col = plotting.Color.pink },
             },
             .{ temp_from - 5, temp_to + 5 },
-            .{ -5, 1705 },
+            .{ -5, 6000 },
         );
     }
 };
