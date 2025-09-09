@@ -86,7 +86,7 @@ const testing = struct {
             });
         }
         _ = 0;
-        try base.visualizeSchedule(dag, platform);
+        try base.visualizeSchedule(dag, platform, .{ TEMP_AMBIANT, TEMP_AMBIANT, TEMP_AMBIANT });
     }
 
     test "theft" {
@@ -104,7 +104,7 @@ const testing = struct {
             });
         }
         _ = 0;
-        try base.visualizeSchedule(dag, platform);
+        try base.visualizeSchedule(dag, platform, .{ TEMP_AMBIANT, TEMP_AMBIANT, TEMP_AMBIANT });
     }
 
     test "tpeft" {
@@ -122,7 +122,7 @@ const testing = struct {
             });
         }
         _ = 0;
-        try base.visualizeSchedule(dag, platform);
+        try base.visualizeSchedule(dag, platform, .{ TEMP_AMBIANT, TEMP_AMBIANT, TEMP_AMBIANT });
     }
 
     test "tppts" {
@@ -140,7 +140,7 @@ const testing = struct {
             });
         }
         _ = 0;
-        try base.visualizeSchedule(dag, platform);
+        try base.visualizeSchedule(dag, platform, .{ TEMP_AMBIANT, TEMP_AMBIANT, TEMP_AMBIANT });
     }
 
     test "tpsls" {
@@ -158,7 +158,7 @@ const testing = struct {
             });
         }
         _ = 0;
-        try base.visualizeSchedule(dag, platform);
+        try base.visualizeSchedule(dag, platform, .{ TEMP_AMBIANT, TEMP_AMBIANT, TEMP_AMBIANT });
     }
 
     test "tods" {
@@ -176,7 +176,7 @@ const testing = struct {
             });
         }
         _ = 0;
-        try base.visualizeSchedule(dag, platform);
+        try base.visualizeSchedule(dag, platform, .{ TEMP_AMBIANT, TEMP_AMBIANT, TEMP_AMBIANT });
     }
 
     test "gaussian-comparison" {}
@@ -325,4 +325,98 @@ pub fn main() !void {
             std.debug.print("\n", .{});
         }
     }
+}
+
+fn realworld() !void {
+    var platform = Platform{
+        .processors = .{ Processor{
+            .pid = 0,
+            .temp_limit = 70,
+            .temp_cur = 45,
+            .thermo = .{ .a = 0, .b = 0.02267, .c0 = 0, .c1 = 0, .c2 = 0, .f = 0 },
+        }, Processor{
+            .pid = 1,
+            .temp_limit = 60,
+            .temp_cur = 55,
+            .thermo = .{ .a = 0, .b = 0.0313, .c0 = 0, .c1 = 0, .c2 = 0, .f = 0 },
+        }, Processor{
+            .pid = 2,
+            .temp_limit = 40,
+            .temp_cur = 100000,
+            .thermo = .{ .a = 0, .b = 0.0313, .c0 = 0, .c1 = 0, .c2 = 0, .f = 0 },
+        } },
+        .communication_bw = .{
+            .{ MAX_BW, 500_000, 500_000 },
+            .{ 500_000, MAX_BW, 500_000 },
+            .{ 500_000, 500_000, MAX_BW },
+        },
+        .communication_lat = .{
+            .{ 0, 0, 0 },
+            .{ 0, 0, 0 },
+            .{ 0, 0, 0 },
+        },
+    };
+    var dag = TaskDAG.init();
+    const wcet =
+        [2][20]f32{
+            .{ 0.9, 0.6, 0.6, 1, 0.8, 0.9, 1, 0.9, 0.9, 1, 1, 0.8, 0.9, 0.6, 1, 1, 1, 1, 0.9, 0.9 },
+            .{ 0.8, 0.9, 0.8, 0.8, 0.7, 1, 0.9, 0.8, 0.8, 0.8, 0.9, 0.9, 0.7, 0.5, 1, 0.9, 0.9, 0.9, 0.6, 0.8 },
+        };
+    const tempss =
+        [2][20]f32{
+            .{ 98, 97, 99, 96, 98, 99, 91, 95, 93, 97, 94, 99, 97, 93, 94, 92, 95, 96, 94, 97 },
+            .{ 84, 84, 88, 74, 86, 86, 83, 82, 86, 81, 75, 78, 77, 86, 81, 83, 84, 81, 89, 93 },
+        };
+
+    for (wcet[0], wcet[1], tempss[0], tempss[1], 0..) |wcet0, wcet1, t0, t1, idx| {
+        try dag.appendNode(.{ .id = idx, .per_proc = .{
+            .{ .wcet = wcet0, .steady_state_temp = t0 },
+            .{ .wcet = wcet1, .steady_state_temp = t1 },
+            .{ .wcet = 5, .steady_state_temp = 100 },
+        } });
+    }
+
+    try dag.connectNodes(0, 4, .{ .data_transfer = 128 });
+    try dag.connectNodes(0, 6, .{ .data_transfer = 512 });
+    try dag.connectNodes(1, 4, .{ .data_transfer = 128 });
+    try dag.connectNodes(1, 6, .{ .data_transfer = 512 });
+    try dag.connectNodes(2, 4, .{ .data_transfer = 128 });
+    try dag.connectNodes(2, 6, .{ .data_transfer = 512 });
+    try dag.connectNodes(3, 4, .{ .data_transfer = 128 });
+    try dag.connectNodes(3, 6, .{ .data_transfer = 512 });
+
+    try dag.connectNodes(4, 8, .{ .data_transfer = 512 });
+    try dag.connectNodes(5, 8, .{ .data_transfer = 512 });
+    try dag.connectNodes(6, 13, .{ .data_transfer = 128 });
+
+    try dag.connectNodes(7, 12, .{ .data_transfer = 64 });
+    try dag.connectNodes(8, 12, .{ .data_transfer = 512 });
+    try dag.connectNodes(8, 13, .{ .data_transfer = 512 });
+
+    try dag.connectNodes(8, 13, .{ .data_transfer = 512 });
+    try dag.connectNodes(9, 13, .{ .data_transfer = 64 });
+    try dag.connectNodes(9, 13, .{ .data_transfer = 64 });
+    try dag.connectNodes(10, 13, .{ .data_transfer = 64 });
+    try dag.connectNodes(10, 14, .{ .data_transfer = 64 });
+    try dag.connectNodes(10, 15, .{ .data_transfer = 64 });
+    try dag.connectNodes(11, 15, .{ .data_transfer = 64 });
+
+    try dag.connectNodes(12, 16, .{ .data_transfer = 128 });
+    try dag.connectNodes(13, 16, .{ .data_transfer = 512 });
+    try dag.connectNodes(13, 17, .{ .data_transfer = 512 });
+    try dag.connectNodes(14, 18, .{ .data_transfer = 64 });
+    try dag.connectNodes(15, 19, .{ .data_transfer = 512 });
+
+    try @import("tmds.zig").schedule(&dag, &platform);
+
+    var makespan: f32 = 0;
+    for (dag.nodes.items) |nd|
+        makespan = @max(makespan, nd.data.actual_finish_time.?);
+    std.debug.print("MAKESPAN : {}\n", .{makespan});
+
+    try base.visualizeSchedule(dag, platform, .{ 45, 55, 1000 });
+}
+
+test "realworld" {
+    try realworld();
 }
